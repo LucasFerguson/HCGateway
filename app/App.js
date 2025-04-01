@@ -37,33 +37,39 @@ Notifications.setNotificationChannel({
   vibrationPattern: [200, 1000, 500, 1000, 500],
 })
 
-let isSentryEnabled = true;
-get('sentryEnabled')
-  .then(res => {
-    if (res != "false") {
-      Sentry.init({
-        dsn: 'https://e4a201b96ea602d28e90b5e4bbe67aa6@sentry.shuchir.dev/6',
-        // enableSpotlight: __DEV__,
-      });
-      Toast.show({
-        type: 'success',
-        text1: "Sentry enabled from settings",
-      });
-    } else {
-      isSentryEnabled = false;
-      Toast.show({
-        type: 'info',
-        text1: "Sentry is disabled",
-      });
-    }
-  })
-  .catch(err => {
-    console.log(err);
-    Toast.show({
-      type: 'error',
-      text1: "Failed to check Sentry settings",
-    });
-  });
+
+//  Probably don't need centralized Sentry error handling for now
+//  2025-04-01 - Lucas
+
+// let isSentryEnabled = true;
+// get('sentryEnabled')
+//   .then(res => {
+//     if (res != "false") {
+//       Sentry.init({
+//         dsn: 'https://e4a201b96ea602d28e90b5e4bbe67aa6@sentry.shuchir.dev/6',
+//         // enableSpotlight: __DEV__,
+//       });
+//       Toast.show({
+//         type: 'success',
+//         text1: "Sentry enabled from settings",
+//       });
+//     } else {
+//       isSentryEnabled = false;
+//       Toast.show({
+//         type: 'info',
+//         text1: "Sentry is disabled",
+//       });
+//     }
+//   })
+//   .catch(err => {
+//     console.log(err);
+//     Toast.show({
+//       type: 'error',
+//       text1: "Failed to check Sentry settings",
+//     });
+//   });
+
+
 ReactNativeForegroundService.register();
 
 const requestUserPermission = async () => {
@@ -88,7 +94,7 @@ messaging().onMessage(remoteMessage => {
 });
 
 let login;
-let apiBase = 'https://api.hcgateway.shuchir.dev';
+let apiBase = 'https://api.hcgateway.shuchir.dev'; // need to change this - Lucas 2025-04-01
 let lastSync = null;
 let taskDelay = 7200 * 1000; // 2 hours
 
