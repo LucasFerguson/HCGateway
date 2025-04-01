@@ -32,6 +32,11 @@ local.properties
 *.hprof
 .cxx/
 
+# Mobile App Firebase google-services.json
+#
+app/android/app/google-services.json
+app/firebase/google-services.json
+
 # node.js
 #
 node_modules/
