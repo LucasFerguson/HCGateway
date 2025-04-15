@@ -1,4 +1,4 @@
-package dev.shuchir.hcgateway
+package org.lucasferguson.hcgateway
 
 import android.app.Application
 import android.content.res.Configuration

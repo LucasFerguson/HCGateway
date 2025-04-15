@@ -1,3 +1,8 @@
+# Lucas Notes
+
+running project on 2025-04-15
+
+
 # HCGateway
 HCGateway is a platform to let developers connect to the Health Connect API on Android via a REST API. You can view the documentation for the REST API [here](https://hcgateway.shuchir.dev/)
 
@@ -149,6 +154,7 @@ You can access the API at `http://localhost:6644`
 
 #### Mobile Application
 - Prerequisites: Node.js 18+, npm, Android Studio (SDK, build-tools, platform-tools), Java 17
+    - Install from this site ( version 17.0.14+7 ) https://www.openlogic.com/openjdk-downloads
 - in another window/tab, `cd` into the app/ folder
 - run `npm install`
 - If you wish to remove sentry:

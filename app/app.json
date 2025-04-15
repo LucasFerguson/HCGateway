@@ -40,7 +40,7 @@
         "backgroundColor": "#ffffff"
       },
       "googleServicesFile": "./firebase/google-services.json",
-      "package": "dev.shuchir.hcgateway",
+      "package": "org.lucasferguson.hcgateway",
       "permissions": [
         "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
         "android.permission.health.READ_BASAL_BODY_TEMPERATURE",

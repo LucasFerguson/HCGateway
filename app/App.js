@@ -13,10 +13,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Toast from 'react-native-toast-message';
 import axios from 'axios';
 import ReactNativeForegroundService from '@supersami/rn-foreground-service';
-import {requestNotifications} from 'react-native-permissions';
+import { requestNotifications } from 'react-native-permissions';
 import * as Sentry from '@sentry/react-native';
 import messaging from '@react-native-firebase/messaging';
-import {Notifications} from 'react-native-notifications';
+import { Notifications } from 'react-native-notifications';
 
 const setObj = async (key, value) => { try { const jsonValue = JSON.stringify(value); await AsyncStorage.setItem(key, jsonValue) } catch (e) { console.log(e) } }
 const setPlain = async (key, value) => { try { await AsyncStorage.setItem(key, value) } catch (e) { console.log(e) } }
@@ -41,7 +41,7 @@ Notifications.setNotificationChannel({
 //  Probably don't need centralized Sentry error handling for now
 //  2025-04-01 - Lucas
 
-// let isSentryEnabled = true;
+let isSentryEnabled = false;
 // get('sentryEnabled')
 //   .then(res => {
 //     if (res != "false") {
@@ -105,44 +105,44 @@ Toast.show({
   autoHide: false
 })
 get('apiBase')
-.then(res => {
-  if (res) {
-    apiBase = res;
-    Toast.hide();
-    Toast.show({
-      type: "success",
-      text1: "API Base URL loaded",
-    })
-  }
-  else {
-    Toast.hide();
-    Toast.show({
-      type: "error",
-      text1: "API Base URL not found. Using default server.",
-    })
-  }
-})
+  .then(res => {
+    if (res) {
+      apiBase = res;
+      Toast.hide();
+      Toast.show({
+        type: "success",
+        text1: "API Base URL loaded",
+      })
+    }
+    else {
+      Toast.hide();
+      Toast.show({
+        type: "error",
+        text1: "API Base URL not found. Using default server.",
+      })
+    }
+  })
 
 get('login')
-.then(res => {
-  if (res) {
-    login = res;
-  }
-})
+  .then(res => {
+    if (res) {
+      login = res;
+    }
+  })
 
 get('lastSync')
-.then(res => {
-  if (res) {
-    lastSync = res;
-  }
-})
+  .then(res => {
+    if (res) {
+      lastSync = res;
+    }
+  })
 
 get('fullSyncMode')
-.then(res => {
-  if (res !== null) {
-    fullSyncMode = res === 'true';
-  }
-})
+  .then(res => {
+    if (res !== null) {
+      fullSyncMode = res === 'true';
+    }
+  })
 
 const askForPermissions = async () => {
   const isInitialized = await initialize();
@@ -277,28 +277,28 @@ const sync = async () => {
     type: 'info',
     text1: "Syncing data...",
   })
-  
+
   const currentTime = new Date().toISOString();
-  
+
   let startTime;
-  if (fullSyncMode) 
+  if (fullSyncMode)
     startTime = String(new Date(new Date().setDate(new Date().getDate() - 29)).toISOString());
-  
+
   else {
-    if (lastSync) 
+    if (lastSync)
       startTime = lastSync;
-    else 
+    else
       startTime = String(new Date(new Date().setDate(new Date().getDate() - 29)).toISOString());
   }
-  
+
   await setPlain('lastSync', currentTime);
   lastSync = currentTime;
 
-  let recordTypes = ["ActiveCaloriesBurned", "BasalBodyTemperature", "BloodGlucose", "BloodPressure", "BasalMetabolicRate", "BodyFat", "BodyTemperature", "BoneMass", "CyclingPedalingCadence", "CervicalMucus", "ExerciseSession", "Distance", "ElevationGained", "FloorsClimbed", "HeartRate", "Height", "Hydration", "LeanBodyMass", "MenstruationFlow", "MenstruationPeriod", "Nutrition", "OvulationTest", "OxygenSaturation", "Power", "RespiratoryRate", "RestingHeartRate", "SleepSession", "Speed", "Steps", "StepsCadence", "TotalCaloriesBurned", "Vo2Max", "Weight", "WheelchairPushes"]; 
-  
+  let recordTypes = ["ActiveCaloriesBurned", "BasalBodyTemperature", "BloodGlucose", "BloodPressure", "BasalMetabolicRate", "BodyFat", "BodyTemperature", "BoneMass", "CyclingPedalingCadence", "CervicalMucus", "ExerciseSession", "Distance", "ElevationGained", "FloorsClimbed", "HeartRate", "Height", "Hydration", "LeanBodyMass", "MenstruationFlow", "MenstruationPeriod", "Nutrition", "OvulationTest", "OxygenSaturation", "Power", "RespiratoryRate", "RestingHeartRate", "SleepSession", "Speed", "Steps", "StepsCadence", "TotalCaloriesBurned", "Vo2Max", "Weight", "WheelchairPushes"];
+
   for (let i = 0; i < recordTypes.length; i++) {
-      let records;
-      try {
+    let records;
+    try {
       records = await readRecords(recordTypes[i],
         {
           timeRangeFilter: {
@@ -310,35 +310,35 @@ const sync = async () => {
       );
 
       records = records.records;
-      }
-      catch (err) {
-        console.log(err)
-        continue;
-      }
-      console.log(recordTypes[i]);
-      numRecords += records.length;
+    }
+    catch (err) {
+      console.log(err)
+      continue;
+    }
+    console.log(recordTypes[i]);
+    numRecords += records.length;
 
-      if (['SleepSession', 'Speed', 'HeartRate'].includes(recordTypes[i])) {
-        console.log("INSIDE IF - ", recordTypes[i])
-        for (let j=0; j<records.length; j++) {
-          console.log("INSIDE FOR", j, recordTypes[i])
-          setTimeout(async () => {
-            try {
-              let record = await readRecord(recordTypes[i], records[j].metadata.id);
-              await axios.post(`${apiBase}/api/v2/sync/${recordTypes[i]}`, {
-                data: record
-              }, {
-                headers: {
-                  "Authorization": `Bearer ${login}`
-                }
-              })
-            }
-            catch (err) {
-              console.log(err)
-            }
+    if (['SleepSession', 'Speed', 'HeartRate'].includes(recordTypes[i])) {
+      console.log("INSIDE IF - ", recordTypes[i])
+      for (let j = 0; j < records.length; j++) {
+        console.log("INSIDE FOR", j, recordTypes[i])
+        setTimeout(async () => {
+          try {
+            let record = await readRecord(recordTypes[i], records[j].metadata.id);
+            await axios.post(`${apiBase}/api/v2/sync/${recordTypes[i]}`, {
+              data: record
+            }, {
+              headers: {
+                "Authorization": `Bearer ${login}`
+              }
+            })
+          }
+          catch (err) {
+            console.log(err)
+          }
 
-            numRecordsSynced += 1;
-            try {
+          numRecordsSynced += 1;
+          try {
             ReactNativeForegroundService.update({
               id: 1244,
               title: 'HCGateway Sync Progress',
@@ -362,22 +362,22 @@ const sync = async () => {
                 color: '#000000',
               })
             }
-            }
-            catch {}
-          }, j*3000)
-        }
-      }
-
-      else {
-        await axios.post(`${apiBase}/api/v2/sync/${recordTypes[i]}`, {
-          data: records
-        }, {
-          headers: {
-            "Authorization": `Bearer ${login}`
           }
-        });
-        numRecordsSynced += records.length;
-        try {
+          catch { }
+        }, j * 3000)
+      }
+    }
+
+    else {
+      await axios.post(`${apiBase}/api/v2/sync/${recordTypes[i]}`, {
+        data: records
+      }, {
+        headers: {
+          "Authorization": `Bearer ${login}`
+        }
+      });
+      numRecordsSynced += records.length;
+      try {
         ReactNativeForegroundService.update({
           id: 1244,
           title: 'HCGateway Sync Progress',
@@ -401,37 +401,37 @@ const sync = async () => {
             color: '#000000',
           })
         }
-        }
-        catch {}
       }
+      catch { }
+    }
   }
 }
 
 const handlePush = async (message) => {
   const isInitialized = await initialize();
-  
+
   let data = JSON.parse(message.data);
   console.log(data);
 
   insertRecords(data)
-  .then((ids) => {
-    console.log("Records inserted successfully: ", { ids });
-  })
-  .catch((error) => {
-    Notifications.postLocalNotification({
-      body: "Error: " + error.message,
-      title: `Push failed for ${data[0].recordType}`,
-      silent: false,
-      category: "Push Errors",
-      fireDate: new Date(),
-      android_channel_id: 'push-errors',
-    });
-  })
+    .then((ids) => {
+      console.log("Records inserted successfully: ", { ids });
+    })
+    .catch((error) => {
+      Notifications.postLocalNotification({
+        body: "Error: " + error.message,
+        title: `Push failed for ${data[0].recordType}`,
+        silent: false,
+        category: "Push Errors",
+        fireDate: new Date(),
+        android_channel_id: 'push-errors',
+      });
+    })
 }
 
 const handleDel = async (message) => {
   const isInitialized = await initialize();
-  
+
   let data = JSON.parse(message.data);
   console.log(data);
 
@@ -445,7 +445,7 @@ const handleDel = async (message) => {
     }
   })
 }
-  
+
 
 export default Sentry.wrap(function App() {
   const [, forceUpdate] = React.useReducer(x => x + 1, 0);
@@ -460,30 +460,30 @@ export default Sentry.wrap(function App() {
     })
 
     try {
-    let fcmToken = await requestUserPermission();
-    form.fcmToken = fcmToken;
-    let response = await axios.post(`${apiBase}/api/v2/login`, form);
-    if ('token' in response.data) {
-      console.log(response.data);
-      await setPlain('login', response.data.token);
-      login = response.data.token;
-      await setPlain('refreshToken', response.data.refresh);
-      forceUpdate();
-      Toast.hide();
-      Toast.show({
-        type: 'success',
-        text1: "Logged in successfully",
-      })
-      askForPermissions();
-    }
-    else {
-      Toast.hide();
-      Toast.show({
-        type: 'error',
-        text1: "Login failed",
-        text2: response.data.error
-      })
-    }
+      let fcmToken = await requestUserPermission();
+      form.fcmToken = fcmToken;
+      let response = await axios.post(`${apiBase}/api/v2/login`, form);
+      if ('token' in response.data) {
+        console.log(response.data);
+        await setPlain('login', response.data.token);
+        login = response.data.token;
+        await setPlain('refreshToken', response.data.refresh);
+        forceUpdate();
+        Toast.hide();
+        Toast.show({
+          type: 'success',
+          text1: "Logged in successfully",
+        })
+        askForPermissions();
+      }
+      else {
+        Toast.hide();
+        Toast.show({
+          type: 'error',
+          text1: "Login failed",
+          text2: response.data.error
+        })
+      }
     }
 
     catch (err) {
@@ -497,45 +497,45 @@ export default Sentry.wrap(function App() {
   }
 
   React.useEffect(() => {
-    requestNotifications(['alert']).then(({status, settings}) => {
+    requestNotifications(['alert']).then(({ status, settings }) => {
       console.log(status, settings)
     });
 
     get('login')
-    .then(res => {
-      if (res) {
-        login = res;
-        get('taskDelay')
-        .then(res => {
-          if (res) taskDelay = Number(res);
-        })
+      .then(res => {
+        if (res) {
+          login = res;
+          get('taskDelay')
+            .then(res => {
+              if (res) taskDelay = Number(res);
+            })
 
-        ReactNativeForegroundService.add_task(() => sync(), {
-          delay: taskDelay,
-          onLoop: true,
-          taskId: 'hcgateway_sync',
-          onError: e => console.log(`Error logging:`, e),
-        });
+          ReactNativeForegroundService.add_task(() => sync(), {
+            delay: taskDelay,
+            onLoop: true,
+            taskId: 'hcgateway_sync',
+            onError: e => console.log(`Error logging:`, e),
+          });
 
-        ReactNativeForegroundService.add_task(() => refreshTokenFunc(), {
-          delay: 10800 * 1000,
-          onLoop: true,
-          taskId: 'refresh_token',
-          onError: e => console.log(`Error logging:`, e),
-        });
+          ReactNativeForegroundService.add_task(() => refreshTokenFunc(), {
+            delay: 10800 * 1000,
+            onLoop: true,
+            taskId: 'refresh_token',
+            onError: e => console.log(`Error logging:`, e),
+          });
 
-        ReactNativeForegroundService.start({
-          id: 1244,
-          title: 'HCGateway Sync Service',
-          message: 'HCGateway is working in the background to sync your data.',
-          icon: 'ic_launcher',
-          setOnlyAlertOnce: true,
-          color: '#000000',
-        }).then(() => console.log('Foreground service started'));
+          ReactNativeForegroundService.start({
+            id: 1244,
+            title: 'HCGateway Sync Service',
+            message: 'HCGateway is working in the background to sync your data.',
+            icon: 'ic_launcher',
+            setOnlyAlertOnce: true,
+            color: '#000000',
+          }).then(() => console.log('Foreground service started'));
 
-        forceUpdate()
-      }
-    })
+          forceUpdate()
+        }
+      })
   }, [login])
 
   return (
@@ -544,7 +544,7 @@ export default Sentry.wrap(function App() {
         <View>
           <Text style={{ fontSize: 20, marginVertical: 10 }}>You are currently logged in.</Text>
           <Text style={{ fontSize: 17, marginVertical: 10 }}>Last Sync: {lastSync}</Text>
-          <Button title='Try!' onPress={ () => { Sentry.captureException(new Error('First error')) }}/>
+          <Button title='Try!' onPress={() => { Sentry.captureException(new Error('First error')) }} />
 
           <Text style={{ marginTop: 10, fontSize: 15 }}>API Base URL:</Text>
           <TextInput
@@ -576,35 +576,35 @@ export default Sentry.wrap(function App() {
             }}
           />
 
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 10 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 10 }}>
             <Text style={{ fontSize: 15 }}>Enable Sentry:</Text>
             <Switch
               value={isSentryEnabled}
               onValueChange={async (value) => {
-              if (value) {
-                Sentry.init({
-                dsn: 'https://0e831d625e3149f83c56fc44d13003b7@o4508755575701504.ingest.de.sentry.io/4509136718004304',
-                tracesSampleRate: 1.0,
-                });
-                Toast.show({
-                type: 'success',
-                text1: "Sentry enabled",
-                });
-                isSentryEnabled = true;
-                forceUpdate();
-              } else {
-                Sentry.close();
-                Toast.show({
-                type: 'success',
-                text1: "Sentry disabled",
-                });
-                isSentryEnabled = false;
-                forceUpdate();
-              }
-              await setPlain('sentryEnabled', value.toString());
+                if (value) {
+                  Sentry.init({
+                    dsn: '',
+                    tracesSampleRate: 1.0,
+                  });
+                  Toast.show({
+                    type: 'success',
+                    text1: "Sentry enabled",
+                  });
+                  isSentryEnabled = true;
+                  forceUpdate();
+                } else {
+                  Sentry.close();
+                  Toast.show({
+                    type: 'success',
+                    text1: "Sentry disabled",
+                  });
+                  isSentryEnabled = false;
+                  forceUpdate();
+                }
+                await setPlain('sentryEnabled', value.toString());
               }}
             />
-            </View>
+          </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 10 }}>
             <Text style={{ fontSize: 15 }}>Full 30-day sync:</Text>
@@ -626,11 +626,11 @@ export default Sentry.wrap(function App() {
               }}
             />
           </View>
-          
+
           {showSyncWarning && (
             <View style={styles.warningContainer}>
               <Text style={styles.warningText}>
-                Warning: Incremental sync only syncs data since the last sync. 
+                Warning: Incremental sync only syncs data since the last sync.
                 You may miss data if the app stops abruptly.
               </Text>
               <View style={styles.warningButtons}>
@@ -686,13 +686,13 @@ export default Sentry.wrap(function App() {
       }
       {!login &&
         <View>
-          <Text style={{ 
+          <Text style={{
             fontSize: 30,
             fontWeight: 'bold',
             textAlign: 'center',
-           }}>Login</Text>
+          }}>Login</Text>
 
-           <Text style={{ marginVertical: 10 }}>If you don't have an account, one will be made for you when logging in.</Text>
+          <Text style={{ marginVertical: 10 }}>If you don't have an account, one will be made for you when logging in.</Text>
 
           <TextInput
             style={styles.input}
@@ -724,7 +724,7 @@ export default Sentry.wrap(function App() {
               onValueChange={async (value) => {
                 if (value) {
                   Sentry.init({
-                    dsn: 'https://e4a201b96ea602d28e90b5e4bbe67aa6@sentry.shuchir.dev/6',
+                    dsn: '',
                   });
                   Toast.show({
                     type: 'success',
@@ -742,7 +742,7 @@ export default Sentry.wrap(function App() {
                   forceUpdate();
                 }
                 await setPlain('sentryEnabled', value.toString());
-              }} 
+              }}
             />
           </View>
 
@@ -755,8 +755,8 @@ export default Sentry.wrap(function App() {
         </View>
       }
 
-    <StatusBar style="dark" />
-    <Toast />
+      <StatusBar style="dark" />
+      <Toast />
     </View>
   );
 });;
@@ -781,7 +781,7 @@ const styles = StyleSheet.create({
     width: 350,
     fontSize: 17
   },
-  
+
   warningContainer: {
     backgroundColor: '#fff3cd',
     borderColor: '#ffeeba',
@@ -790,12 +790,12 @@ const styles = StyleSheet.create({
     padding: 10,
     marginVertical: 10,
   },
-  
+
   warningText: {
     color: '#856404',
     marginBottom: 10,
   },
-  
+
   warningButtons: {
     flexDirection: 'row',
     justifyContent: 'space-around',
