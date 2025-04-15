@@ -11,8 +11,6 @@ The platform consists of two parts:
 > [!IMPORTANT]
 > The database was recently migrated from Appwrite to MongoDB. If you were using the Appwrite version, you will need to migrate your data to the new database. You can find the migration script in the `scripts/` folder. You will need to install the `appwrite` and `pymongo` libraries to run the script, then run the script with the following command: `python3 migrate_1.5.0.py`.
 
-> [!WARNING]
-> v1 routes for the server are now deprecated and will be removed by March 4th, 2025 (90 days) for security reasons. Please update your applications to use the v2 routes. You can find the documentation for the v2 routes [here](https://hcgateway.shuchir.dev/)
 
 ## How it Works
 - The mobile application pings the server every 2 hours to send data. The following data types are supported-
@@ -122,11 +120,14 @@ Follow these steps to set up Firebase:
 1. **Prerequisites**\
     Ensure that you have Docker and Docker Compose installed on your system.
 
-2. **Setting up Environment Variables**
+2. **Setting up the Environment**
 
    - You’ll need to configure environment variables before starting the services.
    - Copy the provided `.env.example` file to `.env` inside the `api/` directory and configure it as necessary. When setting the `MONGO_URI` variable, the following format should be used: `mongodb://<username>:<password>@db:27017/hcgateway?authSource=admin`
    - Set the mongo DB username and password in the `docker-compose.yml` file as well.
+
+    - Visit the firebase console > project settings > Service accounts and click generate new private key
+    - Save the file as `service-account.json` in the `api/` folder
 
 3. **Running the Containers with Docker Compose**\
     The project uses Docker Compose for easier container orchestration. To run the API using Docker Compose, run the following command:
