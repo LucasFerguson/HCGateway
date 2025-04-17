@@ -1,6 +1,8 @@
 # Lucas Notes
 
-running project on 2025-04-15
+running project on 2025-04-15 on server pve3
+API url
+`http://l192.168.8.239:6644`
 
 
 # HCGateway
@@ -140,6 +142,7 @@ Follow these steps to set up Firebase:
    docker-compose up -d
    ```
 You can access the API at `http://localhost:6644`
+
 
 ### Manual
 #### Server
