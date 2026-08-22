@@ -29,12 +29,27 @@ alongside this one. Keep that in mind — some work spans both.
   none). Frontend-only. Follow-ups if wanted: persist last-run summary across
   app restarts; surface per-type error text on tap.
 
-- [ ] **Sync history beyond 30 days.** Two hardcoded `getDate() - 29` windows in
-  [app/App.js](app/App.js) cap history at ~30 days. We merged the
-  `PERMISSION_READ_HEALTH_DATA_HISTORY` manifest permission, but Health Connect
-  only returns older data if that history permission is also **requested at
-  runtime and granted**. Work: lift the hardcoded window + request the history
-  permission. Needs on-device testing to confirm HC actually returns older data.
+- [x] **Sync history beyond 30 days.** Done in code; **needs on-device testing.**
+  What was done in [app/App.js](app/App.js): replaced the hardcoded `getDate() - 29`
+  windows with a configurable, persisted `historyDays`; added a "History window
+  (days back)" input and a **"Sync Full History"** button; and added
+  `requestHistoryPermission()` which asks for the raw Android permission
+  `android.permission.health.READ_HEALTH_DATA_HISTORY` via `PermissionsAndroid`
+  whenever the window reaches past 30 days. Also **fixed the manifest permission
+  string** (the upstream merge added the invalid
+  `android.permission.PERMISSION_READ_HEALTH_DATA_HISTORY`; corrected to
+  `android.permission.health.READ_HEALTH_DATA_HISTORY`) and added it to
+  `app.json` permissions for prebuild durability.
+
+  ⚠️ **Caveats to verify on-device (Android 14+):**
+  - The JS lib `react-native-health-connect@3.2.1` bundles
+    `androidx.health.connect:connect-client:1.1.0-alpha06`, which predates
+    formal history-permission support (added ~alpha07). We request the raw
+    permission string directly to work around this. Confirm the OS actually
+    shows the "access past data" prompt and that reads past 30 days return data.
+  - If it does not work, options: bump `react-native-health-connect` (and the
+    bundled connect-client), or verify the permission appears in Health
+    Connect's app settings. Document findings here.
 
 
 # HCGateway

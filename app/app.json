@@ -40,6 +40,7 @@
       "googleServicesFile": "./firebase/google-services.json",
       "package": "org.lucasferguson.hcgateway",
       "permissions": [
+        "android.permission.health.READ_HEALTH_DATA_HISTORY",
         "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
         "android.permission.health.READ_BASAL_BODY_TEMPERATURE",
         "android.permission.health.READ_BASAL_METABOLIC_RATE",

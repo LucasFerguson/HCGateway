@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View, TextInput, Button, Switch, Modal, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, TextInput, Button, Switch, Modal, TouchableOpacity, PermissionsAndroid, Platform } from 'react-native';
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -99,7 +99,30 @@ let login;
 let apiBase = 'http://192.168.8.239:6644/'; // need to change this - Lucas 2025-04-01
 let lastSync = null;
 let taskDelay = 7200 * 1000; // 2 hours
-let fullSyncMode = true; // Default to full 30-day sync
+let fullSyncMode = true; // Default to full history sync (see historyDays)
+let historyDays = 30; // How many days back a full sync reaches. Health Connect
+// caps reads at 30 days unless the READ_HEALTH_DATA_HISTORY permission is
+// granted, after which older data can be read. See requestHistoryPermission().
+
+// The raw Android permission string for reading health data older than 30 days.
+// The JS health-connect library (v3.2.1) can't express this permission, so it is
+// requested directly via PermissionsAndroid. Requires Android 14 (API 34)+.
+const HEALTH_HISTORY_PERMISSION = 'android.permission.health.READ_HEALTH_DATA_HISTORY';
+
+// Request the READ_HEALTH_DATA_HISTORY runtime permission. Returns true if
+// granted (or already granted). No-op-returns-false on non-Android platforms.
+const requestHistoryPermission = async () => {
+  try {
+    if (Platform.OS !== 'android') return false;
+    const already = await PermissionsAndroid.check(HEALTH_HISTORY_PERMISSION);
+    if (already) return true;
+    const result = await PermissionsAndroid.request(HEALTH_HISTORY_PERMISSION);
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  } catch (err) {
+    console.log('history permission request failed', err);
+    return false;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Sync status store
@@ -173,6 +196,13 @@ get('fullSyncMode')
   .then(res => {
     if (res !== null) {
       fullSyncMode = res === 'true';
+    }
+  })
+
+get('historyDays')
+  .then(res => {
+    if (res !== null && !isNaN(Number(res))) {
+      historyDays = Number(res);
     }
   })
 
@@ -312,16 +342,37 @@ const sync = async (customStartTime, customEndTime) => {
 
   const currentTime = new Date().toISOString();
 
+  // Start of the full-history window: historyDays back from now.
+  const historyStart = String(new Date(new Date().setDate(new Date().getDate() - historyDays)).toISOString());
+
+  // Reading data older than 30 days requires the READ_HEALTH_DATA_HISTORY
+  // permission. Ask for it whenever the requested window reaches past 30 days
+  // (full-history sync with historyDays > 30, or a custom range older than 30d).
+  const daysAgo = (iso) => (Date.now() - new Date(iso).getTime()) / (1000 * 60 * 60 * 24);
+  const needsHistory =
+    (customStartTime && daysAgo(customStartTime) > 30) ||
+    (!customStartTime && fullSyncMode && historyDays > 30);
+  if (needsHistory) {
+    const granted = await requestHistoryPermission();
+    if (!granted) {
+      Toast.show({
+        type: 'error',
+        text1: 'History permission not granted',
+        text2: 'Data older than 30 days may not sync. Grant "access past data" in Health Connect.',
+      });
+    }
+  }
+
   let startTime;
   if (customStartTime) {
     startTime = customStartTime;
   } else if (fullSyncMode) {
-    startTime = String(new Date(new Date().setDate(new Date().getDate() - 29)).toISOString());
+    startTime = historyStart;
   } else {
     if (lastSync)
       startTime = lastSync;
     else
-      startTime = String(new Date(new Date().setDate(new Date().getDate() - 29)).toISOString());
+      startTime = historyStart;
   }
 
   if (!customStartTime) {
@@ -767,7 +818,7 @@ export default Sentry.wrap(function App() {
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 10 }}>
-            <Text style={{ fontSize: 15 }}>Full 30-day sync:</Text>
+            <Text style={{ fontSize: 15 }}>Full history sync:</Text>
             <Switch
               value={fullSyncMode}
               onValueChange={async (value) => {
@@ -779,10 +830,52 @@ export default Sentry.wrap(function App() {
                   Toast.show({
                     type: 'info',
                     text1: "Sync mode updated",
-                    text2: "Will sync full 30 days of data"
+                    text2: `Will sync the last ${historyDays} days of data`
                   });
                   forceUpdate();
                 }
+              }}
+            />
+          </View>
+
+          <Text style={{ marginTop: 10, fontSize: 15 }}>History window (days back):</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="Days of history"
+            keyboardType='numeric'
+            defaultValue={String(historyDays)}
+            onChangeText={text => {
+              const days = Number(text);
+              if (isNaN(days) || days < 1) return;
+              historyDays = days;
+              setPlain('historyDays', String(days));
+            }}
+          />
+          {historyDays > 30 && (
+            <Text style={{ fontSize: 12, color: '#a06a00', marginBottom: 4 }}>
+              Reading past 30 days needs the "access past data" permission in
+              Health Connect. You'll be prompted on the next full-history sync.
+            </Text>
+          )}
+
+          <View style={{ marginTop: 6, marginBottom: 4 }}>
+            <Button
+              title={`Sync Full History (${historyDays} days)`}
+              color="#6a1b9a"
+              onPress={async () => {
+                if (historyDays > 30) {
+                  const granted = await requestHistoryPermission();
+                  if (!granted) {
+                    Toast.show({
+                      type: 'error',
+                      text1: 'History permission not granted',
+                      text2: 'Enable "access past data" for HCGateway in Health Connect, then retry.',
+                    });
+                    return;
+                  }
+                }
+                const start = String(new Date(new Date().setDate(new Date().getDate() - historyDays)).toISOString());
+                sync(start, new Date().toISOString());
               }}
             />
           </View>
