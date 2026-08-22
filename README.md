@@ -226,9 +226,13 @@ Only the Android SDK **command-line tools** are needed, not the full IDE. This i
    npx patch-package        # patches @supersami/rn-foreground-service — required before building
    ```
 
-7. **Build the APK:**
+7. **Build the APK.** The easiest way is the wrapper script in the repo root, which first runs a dependency/setup preflight check and then builds while saving a timestamped log to `build-logs/`:
    ```bash
-   cd android
+   ./build-android-apk-on-linux.sh
+   ```
+   Or run gradle directly:
+   ```bash
+   cd app/android
    chmod +x gradlew         # only needed once, if the executable bit is missing
    ./gradlew assembleRelease
    ```

@@ -77,7 +77,12 @@ def enableProguardInReleaseBuilds = (findProperty('android.enableProguardInRelea
  */
 def jscFlavor = 'org.webkit:android-jsc:+'
 
-apply from: new File(["node", "--print", "require.resolve('@sentry/react-native/package.json')"].execute().text.trim(), "../sentry.gradle")
+// Sentry disabled for this fork — not connected to any Sentry instance.
+// Applying sentry.gradle injects a source-map upload task that fails the
+// build when no Sentry org/project is configured. Re-enable this line (and
+// restore the config in app.json / sentry.properties / AndroidManifest.xml)
+// if crash reporting is wanted again.
+// apply from: new File(["node", "--print", "require.resolve('@sentry/react-native/package.json')"].execute().text.trim(), "../sentry.gradle")
 android {
     ndkVersion rootProject.ext.ndkVersion
 

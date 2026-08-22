@@ -73,3 +73,7 @@ test.py
 __pycache__/
 flask_session/
 service-account.json
+
+# Local Android build logs (created by build-android-apk-on-linux.sh).
+# Ignore the log files themselves but keep the folder's README tracked.
+build-logs/*.log
