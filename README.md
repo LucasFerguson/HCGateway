@@ -173,3 +173,33 @@ npx @sentry/wizard -i reactNative -p android --uninstall
 - run `npx patch-package` to apply a patch to the foreground service library
 - run `npm run android` to start the application, or `cd android && ./gradlew assembleRelease` to build the APK file
     - It is also possible to now use eas build to build the APK file. You can find more at https://docs.expo.dev/build/eas-build/ **NOTE: This must be a local build, since you need to run patch-package before building the APK file.**
+
+---
+
+## Notes on this fork's setup (deviations from the original author)
+
+This fork is built and run for personal use only (single device). The following changes were made so the app is **not** connected to the original author's (shuchir) infrastructure, and so it builds locally on a Linux/WSL machine without Android Studio. They are documented here for future reference.
+
+### Sentry (crash reporting) — disconnected from the original author
+The upstream project ships wired to the original author's Sentry instance. That has been removed so no crash/error data is ever sent to them:
+- `app/android/app/src/main/AndroidManifest.xml` — removed the native `io.sentry.dsn` meta-data that pointed at `sentry.shuchir.dev`. Without a DSN the native Sentry SDK has nowhere to report.
+- `app/android/sentry.properties` — all values commented out, including the original author's build-time **auth token** (used for source-map uploads to their org).
+- `app/app.json` — removed `organization`/`project` from the `@sentry/react-native/expo` plugin config (only relevant if a prebuild is ever run).
+- `app/App.js` — Sentry was already disabled here upstream-of-this-note (`isSentryEnabled = false`, empty `dsn: ''` in the toggles). A commented-out reference to the old DSN remains but never executes.
+
+### Firebase
+- Uses this fork's own Firebase project (package `org.lucasferguson.hcgateway`, project `hcgateway-app`). The real `google-services.json` is not committed; copy it into both `app/firebase/google-services.json` and `app/android/app/google-services.json` before building.
+- The app package was renamed from `dev.shuchir.hcgateway` to `org.lucasferguson.hcgateway` (see commit history) to fix build issues.
+
+### Building locally on Linux / WSL (no Android Studio)
+Only the Android SDK **command-line tools** are needed — not the full IDE:
+1. Install Java 17 (`sudo apt install openjdk-17-jdk`).
+2. Install the Android cmdline-tools into `~/Android/Sdk/cmdline-tools/latest/`.
+3. Set `ANDROID_HOME=~/Android/Sdk` and `JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`.
+4. `sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"` and accept licenses.
+5. In `app/`: `npm install`, then `npx patch-package`, then `cd android && ./gradlew assembleRelease`.
+6. The APK lands at `app/android/app/build/outputs/apk/release/app-release.apk`. Sideload it onto the phone.
+
+Notes:
+- `gradlew` may need its executable bit set on a fresh checkout: `chmod +x app/android/gradlew`.
+- `package-lock.json` / `yarn.lock` may show churn when installing on Linux — this is just platform-specific native binaries (e.g. `@sentry/cli`, `lightningcss`) swapping from `win32-x64` to `linux-x64-gnu`. Expected when moving the build from Windows to Linux.
