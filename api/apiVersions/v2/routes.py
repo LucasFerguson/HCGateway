@@ -117,7 +117,7 @@ def refresh():
         return jsonify({'error': 'invalid refresh token'}), 403
     
     token = secrets.token_urlsafe(32)
-    refresh = secrets.token_urlsafe(32)
+    # refresh = secrets.token_urlsafe(32) # disable refresh token rotation- design flaw, see #35
     expiryDate = datetime.datetime.now() + datetime.timedelta(hours=12)
     usrStore.update_one({'_id': user['_id']}, {"$set": {'token': token, 'refresh': refresh, 'expiry': expiryDate}})
 
@@ -125,6 +125,24 @@ def refresh():
             "token": token,
             "refresh": refresh,
             "expiry": expiryDate.isoformat()
+    }), 200
+
+@v2.route("/revoke", methods=['DELETE'])
+def revoke():
+    token = request.headers.get('Authorization').split(' ')[1]
+
+    db = mongo['hcgateway']
+    usrStore = db['users']
+
+    user = usrStore.find_one({'token': token})
+
+    if not user:
+        return jsonify({'error': 'invalid refresh token'}), 403
+
+    usrStore.update_one({'_id': user['_id']}, {"$unset": {'token': 1, 'refresh': 1, 'expiry': 1}})
+
+    return jsonify({
+            "success": True
     }), 200
 
 @v2.post("/sync/<method>")

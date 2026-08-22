@@ -4,6 +4,24 @@ running project on 2025-04-15 on server pve3
 API url
 `http://l192.168.8.239:6644`
 
+## Scratchpad / TODO (for me + coding agents working in this repo)
+
+This is a shared task list. Coding agents reading this directory: please check
+here for known issues and open work, and update it as items are resolved.
+
+Context: this repo is the **client app + REST API** for a self-hosted health
+dashboard. There is a **separate back-end server project** (not yet wired into
+this repo / not yet shared with the agents working here) that is developed
+alongside this one. Keep that in mind — some work spans both.
+
+- [ ] **Review `/revoke` HTTP-method discrepancy.** The API docs
+  ([doc/api-documentation.yml](doc/api-documentation.yml)) document
+  `/api/v2/revoke` as **POST**, but the implementation
+  ([api/apiVersions/v2/routes.py](api/apiVersions/v2/routes.py)) defines it as
+  **DELETE**. Inherited verbatim from upstream. No runtime impact yet (the app
+  doesn't call `/revoke`), but a client following the docs would get a 405.
+  Decide which is canonical and make them match.
+
 
 # HCGateway
 HCGateway is a platform to let developers connect to the Health Connect API on Android via a REST API. You can view the documentation for the REST API [here](https://hcgateway.shuchir.dev/)

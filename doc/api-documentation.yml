@@ -1,7 +1,7 @@
 ---
 openapi: 3.0.0
 info:
-  version: 2.0.0
+  version: 2.2.0
   title: HCGateway
   description: ''
 servers:
@@ -9,6 +9,8 @@ servers:
 paths:
   "/api/v2/login":
     post:
+      tags:
+        - Authentication
       operationId: get_token
       description: Login a user and get a token to use for authentiction.
       parameters: []
@@ -26,6 +28,8 @@ paths:
                 "$ref": "#/components/schemas/loginObject"
   "/api/v2/refresh":
     post:
+      tags:
+        - Authentication
       operationId: refresh_token
       description: Refresh a user token.
       parameters: []
@@ -45,6 +49,22 @@ paths:
             application/json:
               schema:
                 "$ref": "#/components/schemas/loginObject"
+  "/api/v2/revoke":
+    post:
+      tags:
+        - Authentication
+      operationId: revoke_token
+      description: Revoke all user tokens and refresh tokens immediately. Pass a currently valid token through the Authentication header to revoke your user.
+      parameters: []
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/silentObject"
   "/api/v2/fetch/{method}":
     post:
       operationId: fetch
@@ -112,7 +132,7 @@ paths:
             application/json:
               schema:
                 "$ref": "#/components/schemas/silentObject"
-  "/api/delete/{method}":
+  "/api/v2/delete/{method}":
     delete:
       operationId: deleteData
       description: Request deletion for a record. This method does not delete the

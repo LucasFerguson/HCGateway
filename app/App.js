@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View, TextInput, Button, Switch } from 'react-native';
+import { StyleSheet, Text, View, TextInput, Button, Switch, Modal, TouchableOpacity } from 'react-native';
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
@@ -17,6 +17,7 @@ import { requestNotifications } from 'react-native-permissions';
 import * as Sentry from '@sentry/react-native';
 import messaging from '@react-native-firebase/messaging';
 import { Notifications } from 'react-native-notifications';
+import DateTimePicker, { DateType, useDefaultStyles } from 'react-native-ui-datepicker';
 
 const setObj = async (key, value) => { try { const jsonValue = JSON.stringify(value); await AsyncStorage.setItem(key, jsonValue) } catch (e) { console.log(e) } }
 const setPlain = async (key, value) => { try { await AsyncStorage.setItem(key, value) } catch (e) { console.log(e) } }
@@ -269,43 +270,47 @@ const refreshTokenFunc = async () => {
   }
 }
 
-const sync = async () => {
+const sync = async (customStartTime, customEndTime) => {
   const isInitialized = await initialize();
   console.log("Syncing data...");
   let numRecords = 0;
   let numRecordsSynced = 0;
   Toast.show({
     type: 'info',
-    text1: "Syncing data...",
+    text1: customStartTime ? "Syncing from custom time..." : "Syncing data...",
   })
 
   const currentTime = new Date().toISOString();
 
   let startTime;
-  if (fullSyncMode)
+  if (customStartTime) {
+    startTime = customStartTime;
+  } else if (fullSyncMode) {
     startTime = String(new Date(new Date().setDate(new Date().getDate() - 29)).toISOString());
-
-  else {
+  } else {
     if (lastSync)
       startTime = lastSync;
     else
       startTime = String(new Date(new Date().setDate(new Date().getDate() - 29)).toISOString());
   }
 
-  await setPlain('lastSync', currentTime);
-  lastSync = currentTime;
+  if (!customStartTime) {
+    await setPlain('lastSync', currentTime);
+    lastSync = currentTime;
+  }
 
   let recordTypes = ["ActiveCaloriesBurned", "BasalBodyTemperature", "BloodGlucose", "BloodPressure", "BasalMetabolicRate", "BodyFat", "BodyTemperature", "BoneMass", "CyclingPedalingCadence", "CervicalMucus", "ExerciseSession", "Distance", "ElevationGained", "FloorsClimbed", "HeartRate", "Height", "Hydration", "LeanBodyMass", "MenstruationFlow", "MenstruationPeriod", "Nutrition", "OvulationTest", "OxygenSaturation", "Power", "RespiratoryRate", "RestingHeartRate", "SleepSession", "Speed", "Steps", "StepsCadence", "TotalCaloriesBurned", "Vo2Max", "Weight", "WheelchairPushes"];
 
   for (let i = 0; i < recordTypes.length; i++) {
     let records;
     try {
+      console.log(`Reading records for ${recordTypes[i]} from ${startTime} to ${new Date().toISOString()}`);
       records = await readRecords(recordTypes[i],
         {
           timeRangeFilter: {
             operator: "between",
             startTime: startTime,
-            endTime: String(new Date().toISOString())
+            endTime: customEndTime ? customEndTime : String(new Date().toISOString())
           }
         }
       );
@@ -452,6 +457,11 @@ export default Sentry.wrap(function App() {
   const [, forceUpdate] = React.useReducer(x => x + 1, 0);
   const [form, setForm] = React.useState(null);
   const [showSyncWarning, setShowSyncWarning] = React.useState(false);
+  const [customStartDate, setcustomStartDate] = React.useState(new Date());
+  const [customEndDate, setcustomEndDate] = React.useState(new Date());
+  const [useCustomDates, setUseCustomDates] = React.useState(false);
+  const [showDatePickerModal, setShowDatePickerModal] = React.useState(false);
+  const defaultCalStyles = useDefaultStyles();
 
   const loginFunc = async () => {
     Toast.show({
@@ -539,13 +549,24 @@ export default Sentry.wrap(function App() {
       })
   }, [login])
 
+  const formatDateToISOString = (date) => {
+    if (!date) return null;
+    const midnightDate = new Date(date);
+    midnightDate.setHours(0, 0, 0, 0);
+    return midnightDate.toISOString();
+  };
+
+  const formatDateToReadable = (date) => {
+    if (!date) return 'Not selected';
+    return date.toLocaleDateString();
+  };
+
   return (
     <View style={styles.container}>
       {login &&
         <View>
           <Text style={{ fontSize: 20, marginVertical: 10 }}>You are currently logged in.</Text>
           <Text style={{ fontSize: 17, marginVertical: 10 }}>Last Sync: {lastSync}</Text>
-          <Button title='Try!' onPress={() => { Sentry.captureException(new Error('First error')) }} />
 
           <Text style={{ marginTop: 10, fontSize: 15 }}>API Base URL:</Text>
           <TextInput
@@ -558,21 +579,22 @@ export default Sentry.wrap(function App() {
             }}
           />
 
-          <Text style={{ marginTop: 10, fontSize: 15 }}>Sync Interval (in seconds) (defualt is 2 hours):</Text>
+          <Text style={{ marginTop: 10, fontSize: 15 }}>Sync Interval (in hours):</Text>
           <TextInput
             style={styles.input}
             placeholder="Sync Interval"
             keyboardType='numeric'
-            defaultValue={(taskDelay / 1000).toString()}
+            defaultValue={(taskDelay / (1000 * 60 * 60)).toString()}
             onChangeText={text => {
-              taskDelay = Number(text) * 1000;
-              setPlain('taskDelay', String(text * 1000));
+              const hours = Number(text);
+              taskDelay = hours * 60 * 60 * 1000;
+              setPlain('taskDelay', String(taskDelay));
               ReactNativeForegroundService.update_task(() => sync(), {
                 delay: taskDelay,
               })
               Toast.show({
                 type: 'success',
-                text1: "Sync interval updated",
+                text1: `Sync interval updated to ${hours} ${hours === 1 ? 'hour' : 'hours'}`,
               })
             }}
           />
@@ -659,11 +681,71 @@ export default Sentry.wrap(function App() {
             </View>
           )}
 
-          <View style={{ marginTop: 20 }}>
+          <View style={{ marginTop: 10, marginBottom: 5 }}>
+            <Text style={{ fontSize: 15, marginBottom: 5 }}>Sync Range:</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text>
+                {customStartDate ? formatDateToReadable(customStartDate) : 'Not set'} -
+                {customEndDate ? formatDateToReadable(customEndDate) : 'Not set'}
+              </Text>
+              <Button
+                title="Select Dates"
+                onPress={() => setShowDatePickerModal(true)}
+              />
+            </View>
+          </View>
+
+          <Modal
+            visible={showDatePickerModal}
+            transparent={true}
+            animationType="slide"
+            onRequestClose={() => setShowDatePickerModal(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <Text style={styles.modalTitle}>Select Date Range</Text>
+
+                <DateTimePicker
+                  mode="range"
+                  maxDate={new Date()}
+                  startDate={customStartDate}
+                  endDate={customEndDate}
+                  onChange={(...dates) => {
+                    setUseCustomDates(true);
+                    if (dates[0].startDate) setcustomStartDate(dates[0].startDate);
+                    if (dates[0].endDate) setcustomEndDate(dates[0].endDate);
+                  }}
+                  styles={defaultCalStyles}
+                />
+
+                <View style={styles.modalButtons}>
+                  <Button
+                    title="Cancel"
+                    onPress={() => setShowDatePickerModal(false)}
+                    color="darkgrey"
+                  />
+                  <Button
+                    title="Apply"
+                    onPress={() => {
+                      setUseCustomDates(true);
+                      setShowDatePickerModal(false);
+                    }}
+                  />
+                </View>
+              </View>
+            </View>
+          </Modal>
+
+          <View style={{ marginTop: 10, marginBottom: 10 }}>
             <Button
-              title="Sync Now"
+              title={useCustomDates ? "Sync Selected Range" : "Sync Now (Default)"}
               onPress={() => {
-                sync()
+                if (!useCustomDates) {
+                  sync();
+                }
+                else if (customStartDate && customEndDate) {
+                  sync(formatDateToISOString(customStartDate), formatDateToISOString(customEndDate));
+                }
               }}
             />
           </View>
@@ -800,5 +882,33 @@ const styles = StyleSheet.create({
   warningButtons: {
     flexDirection: 'row',
     justifyContent: 'space-around',
+  },
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 10,
+    padding: 20,
+    width: '90%',
+    maxHeight: '80%',
+  },
+
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: 15,
   },
 });
