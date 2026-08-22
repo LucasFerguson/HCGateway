@@ -180,6 +180,8 @@ npx @sentry/wizard -i reactNative -p android --uninstall
 
 This fork is built and run for personal use only (single device). The following changes were made so the app is **not** connected to the original author's (shuchir) infrastructure, and so it builds locally on a Linux/WSL machine without Android Studio. They are documented here for future reference.
 
+**This is now the primary/intended way to build this project.** The methodology behind building the APK on Linux is simply so that I don't have to install the full Android Studio on Windows across all the devices I want to edit this app on — a lightweight Linux/WSL command-line toolchain travels much more easily.
+
 ### Sentry (crash reporting) — disconnected from the original author
 The upstream project ships wired to the original author's Sentry instance. That has been removed so no crash/error data is ever sent to them:
 - `app/android/app/src/main/AndroidManifest.xml` — removed the native `io.sentry.dsn` meta-data that pointed at `sentry.shuchir.dev`. Without a DSN the native Sentry SDK has nowhere to report.
@@ -191,15 +193,59 @@ The upstream project ships wired to the original author's Sentry instance. That 
 - Uses this fork's own Firebase project (package `org.lucasferguson.hcgateway`, project `hcgateway-app`). The real `google-services.json` is not committed; copy it into both `app/firebase/google-services.json` and `app/android/app/google-services.json` before building.
 - The app package was renamed from `dev.shuchir.hcgateway` to `org.lucasferguson.hcgateway` (see commit history) to fix build issues.
 
-### Building locally on Linux / WSL (no Android Studio)
-Only the Android SDK **command-line tools** are needed — not the full IDE:
-1. Install Java 17 (`sudo apt install openjdk-17-jdk`).
-2. Install the Android cmdline-tools into `~/Android/Sdk/cmdline-tools/latest/`.
-3. Set `ANDROID_HOME=~/Android/Sdk` and `JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64`.
-4. `sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"` and accept licenses.
-5. In `app/`: `npm install`, then `npx patch-package`, then `cd android && ./gradlew assembleRelease`.
-6. The APK lands at `app/android/app/build/outputs/apk/release/app-release.apk`. Sideload it onto the phone.
+### Building locally on Linux / WSL (no Android Studio) — the current build process
 
-Notes:
-- `gradlew` may need its executable bit set on a fresh checkout: `chmod +x app/android/gradlew`.
-- `package-lock.json` / `yarn.lock` may show churn when installing on Linux — this is just platform-specific native binaries (e.g. `@sentry/cli`, `lightningcss`) swapping from `win32-x64` to `linux-x64-gnu`. Expected when moving the build from Windows to Linux.
+Only the Android SDK **command-line tools** are needed, not the full IDE. This is the exact process followed to get a working build, in order:
+
+1. **Install Java 17** (via the distro package manager):
+   ```bash
+   sudo apt update && sudo apt install -y openjdk-17-jdk
+   ```
+
+2. **Download the Android SDK command-line tools.** Get the latest "Command line tools only" package for Linux directly from Google's official site — <https://developer.android.com/studio#command-line-tools-only> — rather than a pinned URL, since the version bumps over time and old links rot. Unzip it so the tools end up at `~/Android/Sdk/cmdline-tools/latest/` (the folder inside must be named `latest`).
+
+3. **Set the environment variables** (these examples are for the fish shell — put them in `~/.config/fish/config.fish` so every shell has them; for bash/zsh use `export` in `~/.bashrc`/`~/.zshrc`):
+   ```fish
+   set -gx ANDROID_HOME $HOME/Android/Sdk
+   set -gx JAVA_HOME /usr/lib/jvm/java-17-openjdk-amd64
+   fish_add_path $ANDROID_HOME/cmdline-tools/latest/bin $ANDROID_HOME/platform-tools
+   ```
+
+4. **Install the SDK packages and accept licenses** (`android-34` / `build-tools;34.0.0` match `compileSdkVersion: 34` in `app/app.json`):
+   ```bash
+   sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+   sdkmanager --licenses   # accept all
+   ```
+
+5. **Put the Firebase file in place** — copy your real `google-services.json` into **both** `app/firebase/google-services.json` and `app/android/app/google-services.json` (see the Firebase section above; it is git-ignored so it never lives in the repo).
+
+6. **Install JS deps and apply the required patch:**
+   ```bash
+   cd app
+   npm install
+   npx patch-package        # patches @supersami/rn-foreground-service — required before building
+   ```
+
+7. **Build the APK:**
+   ```bash
+   cd android
+   chmod +x gradlew         # only needed once, if the executable bit is missing
+   ./gradlew assembleRelease
+   ```
+   The first run downloads the Gradle 8.6 distribution and all Android dependencies (10–20 min); later builds are much faster. The APK lands at `app/android/app/build/outputs/apk/release/app-release.apk`. Sideload it onto the phone.
+
+**Gotchas encountered along the way (already fixed in this repo):**
+- `gradlew` needs its executable bit set on a fresh checkout: `chmod +x app/android/gradlew`.
+- `app/android/gradle.properties` previously hardcoded `org.gradle.java.home` to a **Windows** JDK path, which broke the Linux build. It is now left unset so Gradle falls back to `JAVA_HOME`, keeping the file portable across machines/OSes.
+- `package-lock.json` / `yarn.lock` may show churn when installing on Linux — this is just platform-specific native binaries (e.g. `@sentry/cli`, `lightningcss`) swapping from `win32-x64` to `linux-x64-gnu`. Expected when moving the build off Windows.
+
+> [!NOTE]
+> Because a few files carry machine/OS-specific values (JDK path, native lockfile binaries), switching between building on Windows and Linux may require small local adjustments. The repo is currently tuned for the Linux/WSL command-line build described above.
+
+### Reverting to an Android Studio build
+If this repo ever needs to go back to being built with Android Studio (e.g. on a Windows machine), the following would need to be changed back:
+- **`app/android/gradle.properties`** — re-add `org.gradle.java.home` pointing at that machine's JDK install (or rely on Android Studio's bundled JDK / the IDE's Gradle JDK setting instead of the env var).
+- **Toolchain** — install Android Studio and let it manage the SDK, platform-tools, and build-tools, instead of the standalone `cmdline-tools` + `sdkmanager` setup above.
+- **`package-lock.json` / `yarn.lock`** — expect the reverse native-binary churn (`linux-x64-gnu` → `win32-x64`) after running `npm install` on Windows.
+- **Sentry (optional)** — if crash reporting is wanted again, restore a DSN in `app/android/app/src/main/AndroidManifest.xml`, the values in `app/android/sentry.properties`, and the `organization`/`project` in `app/app.json` (point them at *your own* Sentry, not the original author's).
+- Everything else (Firebase file placement, `patch-package`) stays the same — those are not tied to the build environment.
