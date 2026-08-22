@@ -22,6 +22,20 @@ alongside this one. Keep that in mind — some work spans both.
   doesn't call `/revoke`), but a client following the docs would get a 405.
   Decide which is canonical and make them match.
 
+- [x] **In-app sync status UI (per-type breakdown).** Done. Added a module-level
+  `syncStatus` store + listener that `sync()` in [app/App.js](app/App.js) updates
+  live; the App component renders a status panel with overall progress and a
+  per-record-type list with status badges (pending / syncing / done / failed /
+  none). Frontend-only. Follow-ups if wanted: persist last-run summary across
+  app restarts; surface per-type error text on tap.
+
+- [ ] **Sync history beyond 30 days.** Two hardcoded `getDate() - 29` windows in
+  [app/App.js](app/App.js) cap history at ~30 days. We merged the
+  `PERMISSION_READ_HEALTH_DATA_HISTORY` manifest permission, but Health Connect
+  only returns older data if that history permission is also **requested at
+  runtime and granted**. Work: lift the hardcoded window + request the history
+  permission. Needs on-device testing to confirm HC actually returns older data.
+
 
 # HCGateway
 HCGateway is a platform to let developers connect to the Health Connect API on Android via a REST API. You can view the documentation for the REST API [here](https://hcgateway.shuchir.dev/)

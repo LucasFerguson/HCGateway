@@ -101,6 +101,36 @@ let lastSync = null;
 let taskDelay = 7200 * 1000; // 2 hours
 let fullSyncMode = true; // Default to full 30-day sync
 
+// ---------------------------------------------------------------------------
+// Sync status store
+// sync() runs at module scope (also from the background foreground-service),
+// so it can't call React setState directly. Instead it mutates this object and
+// calls notifySyncStatus(); the App component registers a listener to re-render.
+// Per-type states: 'pending' | 'syncing' | 'done' | 'failed' | 'skipped'
+// ---------------------------------------------------------------------------
+let syncStatus = {
+  running: false,
+  startedAt: null,
+  finishedAt: null,
+  numRecords: 0,
+  numRecordsSynced: 0,
+  currentType: null,
+  types: {}, // { [recordType]: { state, count, synced, error } }
+};
+let syncStatusListener = null;
+const STATUS_BADGE = {
+  pending: { label: 'pending', color: '#9e9e9e' },
+  syncing: { label: 'syncing', color: '#1e88e5' },
+  done: { label: 'done', color: '#2e7d32' },
+  failed: { label: 'failed', color: '#c62828' },
+  skipped: { label: 'none', color: '#bdbdbd' },
+};
+const notifySyncStatus = () => { try { if (syncStatusListener) syncStatusListener(); } catch (e) { console.log(e) } };
+const setTypeStatus = (type, patch) => {
+  syncStatus.types[type] = { ...(syncStatus.types[type] || { state: 'pending', count: 0, synced: 0, error: null }), ...patch };
+  notifySyncStatus();
+};
+
 Toast.show({
   type: 'info',
   text1: "Loading API Base URL...",
@@ -301,8 +331,22 @@ const sync = async (customStartTime, customEndTime) => {
 
   let recordTypes = ["ActiveCaloriesBurned", "BasalBodyTemperature", "BloodGlucose", "BloodPressure", "BasalMetabolicRate", "BodyFat", "BodyTemperature", "BoneMass", "CyclingPedalingCadence", "CervicalMucus", "ExerciseSession", "Distance", "ElevationGained", "FloorsClimbed", "HeartRate", "Height", "Hydration", "LeanBodyMass", "MenstruationFlow", "MenstruationPeriod", "Nutrition", "OvulationTest", "OxygenSaturation", "Power", "RespiratoryRate", "RestingHeartRate", "SleepSession", "Speed", "Steps", "StepsCadence", "TotalCaloriesBurned", "Vo2Max", "Weight", "WheelchairPushes"];
 
+  // Initialize the sync status store for this run.
+  syncStatus = {
+    running: true,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    numRecords: 0,
+    numRecordsSynced: 0,
+    currentType: null,
+    types: recordTypes.reduce((acc, t) => { acc[t] = { state: 'pending', count: 0, synced: 0, error: null }; return acc; }, {}),
+  };
+  notifySyncStatus();
+
   for (let i = 0; i < recordTypes.length; i++) {
     let records;
+    syncStatus.currentType = recordTypes[i];
+    setTypeStatus(recordTypes[i], { state: 'syncing' });
     try {
       console.log(`Reading records for ${recordTypes[i]} from ${startTime} to ${new Date().toISOString()}`);
       records = await readRecords(recordTypes[i],
@@ -319,19 +363,27 @@ const sync = async (customStartTime, customEndTime) => {
     }
     catch (err) {
       console.log(err)
+      setTypeStatus(recordTypes[i], { state: 'failed', error: String(err && err.message ? err.message : err) });
       continue;
     }
     console.log(recordTypes[i]);
     numRecords += records.length;
+    syncStatus.numRecords = numRecords;
+    setTypeStatus(recordTypes[i], { count: records.length });
+    if (records.length === 0) {
+      setTypeStatus(recordTypes[i], { state: 'skipped' });
+    }
 
     if (['SleepSession', 'Speed', 'HeartRate'].includes(recordTypes[i])) {
       console.log("INSIDE IF - ", recordTypes[i])
+      const batchType = recordTypes[i];
       for (let j = 0; j < records.length; j++) {
         console.log("INSIDE FOR", j, recordTypes[i])
         setTimeout(async () => {
+          let recordFailed = false;
           try {
-            let record = await readRecord(recordTypes[i], records[j].metadata.id);
-            await axios.post(`${apiBase}/api/v2/sync/${recordTypes[i]}`, {
+            let record = await readRecord(batchType, records[j].metadata.id);
+            await axios.post(`${apiBase}/api/v2/sync/${batchType}`, {
               data: record
             }, {
               headers: {
@@ -341,9 +393,24 @@ const sync = async (customStartTime, customEndTime) => {
           }
           catch (err) {
             console.log(err)
+            recordFailed = true;
           }
 
           numRecordsSynced += 1;
+          // Per-type progress for this batched type; mark done once all of its
+          // records have been attempted. Track a sticky error so a single
+          // failed record leaves the type 'failed' even if later ones succeed.
+          const t = syncStatus.types[batchType] || { state: 'syncing', count: records.length, synced: 0, error: null };
+          const synced = (t.synced || 0) + 1;
+          const stickyError = t.error || (recordFailed ? 'one or more records failed to upload' : null);
+          const allDone = synced >= records.length;
+          setTypeStatus(batchType, {
+            synced,
+            error: stickyError,
+            state: allDone ? (stickyError ? 'failed' : 'done') : 'syncing',
+          });
+          syncStatus.numRecordsSynced = numRecordsSynced;
+          notifySyncStatus();
           try {
             ReactNativeForegroundService.update({
               id: 1244,
@@ -375,14 +442,23 @@ const sync = async (customStartTime, customEndTime) => {
     }
 
     else {
-      await axios.post(`${apiBase}/api/v2/sync/${recordTypes[i]}`, {
-        data: records
-      }, {
-        headers: {
-          "Authorization": `Bearer ${login}`
-        }
-      });
+      try {
+        await axios.post(`${apiBase}/api/v2/sync/${recordTypes[i]}`, {
+          data: records
+        }, {
+          headers: {
+            "Authorization": `Bearer ${login}`
+          }
+        });
+        setTypeStatus(recordTypes[i], { synced: records.length, state: records.length === 0 ? 'skipped' : 'done' });
+      }
+      catch (err) {
+        console.log(err)
+        setTypeStatus(recordTypes[i], { state: 'failed', error: String(err && err.message ? err.message : err) });
+      }
       numRecordsSynced += records.length;
+      syncStatus.numRecordsSynced = numRecordsSynced;
+      notifySyncStatus();
       try {
         ReactNativeForegroundService.update({
           id: 1244,
@@ -411,6 +487,13 @@ const sync = async (customStartTime, customEndTime) => {
       catch { }
     }
   }
+
+  // Mark the run finished. Batched types (HeartRate/Speed/SleepSession) may
+  // still be flushing via setTimeout, but the read/upload dispatch is complete.
+  syncStatus.running = false;
+  syncStatus.finishedAt = new Date().toISOString();
+  syncStatus.currentType = null;
+  notifySyncStatus();
 }
 
 const handlePush = async (message) => {
@@ -462,6 +545,17 @@ export default Sentry.wrap(function App() {
   const [useCustomDates, setUseCustomDates] = React.useState(false);
   const [showDatePickerModal, setShowDatePickerModal] = React.useState(false);
   const defaultCalStyles = useDefaultStyles();
+  const [syncStatusView, setSyncStatusView] = React.useState(syncStatus);
+
+  // Subscribe to the module-level sync status store so the in-app status UI
+  // updates live as sync() progresses. We copy into React state (shallow +
+  // fresh types object) so React sees a new reference and re-renders.
+  React.useEffect(() => {
+    syncStatusListener = () => {
+      setSyncStatusView({ ...syncStatus, types: { ...syncStatus.types } });
+    };
+    return () => { if (syncStatusListener) syncStatusListener = null; };
+  }, [])
 
   const loginFunc = async () => {
     Toast.show({
@@ -567,6 +661,49 @@ export default Sentry.wrap(function App() {
         <View>
           <Text style={{ fontSize: 20, marginVertical: 10 }}>You are currently logged in.</Text>
           <Text style={{ fontSize: 17, marginVertical: 10 }}>Last Sync: {lastSync}</Text>
+
+          {/* ---- Sync status panel: per-record-type breakdown ---- */}
+          <View style={styles.statusPanel}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={styles.statusHeader}>Sync Status</Text>
+              <Text style={styles.statusState}>
+                {syncStatusView.running
+                  ? `Syncing${syncStatusView.currentType ? ` ${syncStatusView.currentType}…` : '…'}`
+                  : (syncStatusView.finishedAt ? 'Idle (last run complete)' : 'Idle')}
+              </Text>
+            </View>
+
+            {(syncStatusView.numRecords > 0) && (
+              <View style={{ marginTop: 6 }}>
+                <Text style={{ fontSize: 13, color: '#555' }}>
+                  {syncStatusView.numRecordsSynced}/{syncStatusView.numRecords} records
+                </Text>
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${Math.min(100, Math.round((syncStatusView.numRecordsSynced / Math.max(1, syncStatusView.numRecords)) * 100))}%` }]} />
+                </View>
+              </View>
+            )}
+
+            <View style={styles.typeList}>
+              {Object.keys(syncStatusView.types).map((t) => {
+                const info = syncStatusView.types[t];
+                const badge = STATUS_BADGE[info.state] || STATUS_BADGE.pending;
+                return (
+                  <View key={t} style={styles.typeRow}>
+                    <Text style={styles.typeName} numberOfLines={1}>{t}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      {info.count > 0 && (
+                        <Text style={styles.typeCount}>{info.synced}/{info.count}</Text>
+                      )}
+                      <View style={[styles.badge, { backgroundColor: badge.color }]}>
+                        <Text style={styles.badgeText}>{badge.label}</Text>
+                      </View>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
 
           <Text style={{ marginTop: 10, fontSize: 15 }}>API Base URL:</Text>
           <TextInput
@@ -910,5 +1047,75 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     marginTop: 15,
+  },
+
+  statusPanel: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 8,
+    padding: 12,
+    marginVertical: 10,
+    backgroundColor: '#fafafa',
+  },
+
+  statusHeader: {
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+
+  statusState: {
+    fontSize: 13,
+    color: '#555',
+  },
+
+  progressTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#e0e0e0',
+    marginTop: 4,
+    overflow: 'hidden',
+  },
+
+  progressFill: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#1e88e5',
+  },
+
+  typeList: {
+    marginTop: 10,
+  },
+
+  typeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 3,
+  },
+
+  typeName: {
+    fontSize: 13,
+    flexShrink: 1,
+    marginRight: 8,
+  },
+
+  typeCount: {
+    fontSize: 12,
+    color: '#777',
+    marginRight: 6,
+  },
+
+  badge: {
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    minWidth: 58,
+    alignItems: 'center',
+  },
+
+  badgeText: {
+    color: 'white',
+    fontSize: 11,
+    fontWeight: '600',
   },
 });
