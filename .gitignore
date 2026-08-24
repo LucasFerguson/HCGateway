@@ -68,11 +68,22 @@ buck-out/
 /ios/Pods/
 /vendor/bundle/
 
+# Local environment and secret files. Keep checked-in examples available.
 .env
+.env.*
+!.env.example
 test.py
 __pycache__/
 flask_session/
 service-account.json
+
+# Local MongoDB data created by Docker Compose.
+/db/
+
+# Optional machine-specific Compose overrides.
+/docker-compose.override.yml
+/compose.override.yml
+/compose.override.yaml
 
 # Local Android build logs (created by build-android-apk-on-linux.sh).
 # Ignore the log files themselves but keep the folder's README tracked.
