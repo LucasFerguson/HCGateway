@@ -9,10 +9,16 @@ API url
 This is a shared task list. Coding agents reading this directory: please check
 here for known issues and open work, and update it as items are resolved.
 
-Context: this repo is the **client app + REST API** for a self-hosted health
-dashboard. There is a **separate back-end server project** (not yet wired into
-this repo / not yet shared with the agents working here) that is developed
-alongside this one. Keep that in mind — some work spans both.
+Context: this repo contains the mobile client, REST API, MongoDB configuration,
+and the background analytics backend for a self-hosted health dashboard.
+
+- [x] **Backend analytics engine.** Ported the dashboard's
+  `health-analytics-v6` TypeScript behavior to Python, including multi-device
+  sleep reconciliation, daily metrics, sleep debt/consistency, and experimental
+  healthspan estimates. A separate leased worker writes encrypted, immutable
+  MongoDB runs; authenticated snapshot, daily, status, config, rebuild, and
+  inventory endpoints are frontend-ready. See
+  [doc/frontend-data-model.md](doc/frontend-data-model.md).
 
 - [ ] **Review `/revoke` HTTP-method discrepancy.** The API docs
   ([doc/api-documentation.yml](doc/api-documentation.yml)) document
@@ -55,8 +61,10 @@ alongside this one. Keep that in mind — some work spans both.
 # HCGateway
 HCGateway is a platform to let developers connect to the Health Connect API on Android via a REST API. You can view the documentation for the REST API [here](https://hcgateway.shuchir.dev/)
 
-The platform consists of two parts:
+The platform consists of four parts:
 - A REST API/server
+- A background analytics worker
+- MongoDB for raw and prepared data
 - A mobile application that pings the server periodically
 
 > [!NOTE]
@@ -177,18 +185,32 @@ Follow these steps to set up Firebase:
 2. **Setting up the Environment**
 
    - You’ll need to configure environment variables before starting the services.
-   - Copy the provided `.env.example` file to `.env` inside the `api/` directory and configure it as necessary. When setting the `MONGO_URI` variable, the following format should be used: `mongodb://<username>:<password>@db:27017/hcgateway?authSource=admin`
-   - Set the mongo DB username and password in the `docker-compose.yml` file as well.
+   - Copy the root `.env.example` file to `.env` and set a strong local MongoDB password.
+   - Copy `api/.env.example` to `api/.env` and configure it as necessary. When setting `MONGO_URI`, use `mongodb://root:<the-same-password>@db:27017/hcgateway?authSource=admin`.
 
     - Visit the firebase console > project settings > Service accounts and click generate new private key
     - Save the file as `service-account.json` in the `api/` folder
 
 3. **Running the Containers with Docker Compose**\
-    The project uses Docker Compose for easier container orchestration. To run the API using Docker Compose, run the following command:
+    The project uses Docker Compose for the API, analytics worker, and MongoDB:
     ```bash
-   docker-compose up -d
-   ```
+   docker compose up -d --build
+    ```
 You can access the API at `http://localhost:6644`
+
+Useful lifecycle commands:
+
+```bash
+docker compose ps
+docker compose logs -f analytics-worker
+docker compose down       # preserves the bind-mounted ./db data
+docker compose up -d
+```
+
+Do not add `--volumes` to `down` unless database deletion is intentional. On
+this host, read the MongoDB/kernel compatibility note in
+[doc/frontend-data-model.md](doc/frontend-data-model.md) before changing the
+pinned database image.
 
 
 ### Manual
@@ -200,7 +222,10 @@ You can access the API at `http://localhost:6644`
 - rename `.env.example` to `.env` and fill in the values
 - Visit the firebase console > project settings > Service accounts and click generate new private key
 - Save the file as `service-account.json` in the `api/` folder
-- run `python3 main.py` to start the server
+- run `gunicorn --bind 0.0.0.0:6644 --workers 2 --threads 4 main:app` to start
+  the API
+- in another process, run `python3 -m analytics_engine.worker` to start the
+  analytics worker
 
 #### Mobile Application
 - Prerequisites: Node.js 18+, npm, Android Studio (SDK, build-tools, platform-tools), Java 17

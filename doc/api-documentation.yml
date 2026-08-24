@@ -166,6 +166,101 @@ paths:
             application/json:
               schema:
                 "$ref": "#/components/schemas/silentObject"
+  "/api/v2/analytics/snapshot":
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsSnapshot
+      description: Return the current frontend-ready health analytics snapshot.
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: The current immutable analytics run.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [generatedAt, source, sleepSessions, analytics]
+                properties:
+                  generatedAt: {type: string, format: date-time}
+                  source: {type: string, example: health-connect}
+                  sleepSessions: {type: array, items: {type: object}}
+                  analytics: {type: object}
+        '404': {description: The first background analytics run is not ready.}
+  "/api/v2/analytics/daily":
+    get:
+      tags: [Analytics]
+      operationId: getDailyAnalytics
+      description: Return date-indexed documents from the current analytics run.
+      security:
+      - bearerAuth: []
+      parameters:
+      - {in: query, name: start, schema: {type: string, format: date}}
+      - {in: query, name: end, schema: {type: string, format: date}}
+      - {in: query, name: limit, schema: {type: integer, minimum: 1, maximum: 1000, default: 400}}
+      responses:
+        '200':
+          description: Daily prepared analytics.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runId: {type: string}
+                  count: {type: integer}
+                  days: {type: array, items: {type: object}}
+  "/api/v2/analytics/status":
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsStatus
+      description: Return background job status and current-run metadata.
+      security:
+      - bearerAuth: []
+      responses:
+        '200': {description: Analytics status.}
+  "/api/v2/analytics/rebuild":
+    post:
+      tags: [Analytics]
+      operationId: rebuildAnalytics
+      description: Queue a non-blocking analytics rebuild.
+      security:
+      - bearerAuth: []
+      responses:
+        '202': {description: Rebuild queued.}
+  "/api/v2/analytics/config":
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsConfig
+      security:
+      - bearerAuth: []
+      responses:
+        '200': {description: Effective analytics configuration.}
+    put:
+      tags: [Analytics]
+      operationId: updateAnalyticsConfig
+      description: Update analytics configuration and queue a rebuild.
+      security:
+      - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                homeTimeZone: {type: string, example: America/Los_Angeles}
+                sleepTargetMinutes: {type: integer, minimum: 240, maximum: 720}
+                birthDate: {type: string, format: date, nullable: true}
+      responses:
+        '202': {description: Configuration accepted and rebuild queued.}
+  "/api/v2/analytics/inventory":
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsInventory
+      description: Return raw signal, date-range, and source counts without decrypting values.
+      security:
+      - bearerAuth: []
+      responses:
+        '200': {description: Raw-data inventory.}
 components:
   securitySchemes:
     bearerAuth:
