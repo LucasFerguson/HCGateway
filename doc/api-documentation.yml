@@ -326,6 +326,19 @@ paths:
       - bearerAuth: []
       responses:
         '200': {description: Raw-data inventory.}
+  "/api/v2/analytics/devices":
+    get:
+      tags: [Analytics]
+      operationId: getAnalyticsDevices
+      description: >-
+        Return a device/source catalog derived from raw Health Connect provenance.
+        Each entry includes a stable observed identity, description, device fields,
+        recording methods, signal counts, date coverage, association fields, and an
+        ambiguity flag. Source-only identities can combine multiple physical devices.
+      security:
+      - bearerAuth: []
+      responses:
+        '200': {description: Observed Health Connect device and source catalog.}
 components:
   securitySchemes:
     bearerAuth:

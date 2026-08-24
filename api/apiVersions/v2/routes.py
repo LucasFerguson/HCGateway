@@ -20,7 +20,7 @@ from analytics_engine.context import AnalyticsContext, context_for_user, validat
 from analytics_engine.crypto import cipher_for_user
 from analytics_engine.day_dashboard import empty_day
 from analytics_engine.jobs import enqueue_job
-from analytics_engine.service import inventory_for_user
+from analytics_engine.service import device_inventory_for_user, inventory_for_user
 from analytics_engine.store import current_metadata, read_daily, read_snapshot
 from analytics_engine.sync_status import COLLECTION as SYNC_STATUS_COLLECTION, record_upload, status_response
 
@@ -265,6 +265,14 @@ def analyticsInventory():
     if not user:
         return jsonify({'error': 'invalid user id'}), 400
     return jsonify(inventory_for_user(user_db)), 200
+
+
+@v2.get("/analytics/devices")
+def analyticsDevices():
+    user, user_db = current_user_and_db()
+    if not user:
+        return jsonify({'error': 'invalid user id'}), 400
+    return jsonify(device_inventory_for_user(user_db)), 200
 
 
 @v2.post("/analytics/rebuild")

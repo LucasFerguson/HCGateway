@@ -153,6 +153,53 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
         analytics_status = self.client.get("/api/v2/analytics/status", headers=self.auth()).get_json()
         self.assertTrue(analytics_status["phoneSync"]["observedActive"])
 
+    def test_device_inventory_preserves_provenance_and_flags_ambiguous_sources(self):
+        records = [
+            {
+                "metadata": {
+                    "id": "watch-steps",
+                    "dataOrigin": "com.fitbit.FitbitMobile",
+                    "device": {"manufacturer": None, "model": None, "type": 0},
+                    "recordingMethod": 2,
+                },
+                "startTime": "2026-02-05T12:00:00Z",
+                "endTime": "2026-02-05T13:00:00Z",
+                "count": 500,
+            },
+            {
+                "metadata": {
+                    "id": "phone-steps-with-device",
+                    "dataOrigin": "com.android.healthconnect.phone.test",
+                    "device": {"manufacturer": "Example", "model": "Phone 1", "type": 2},
+                    "recordingMethod": 2,
+                },
+                "startTime": "2026-02-05T13:00:00Z",
+                "endTime": "2026-02-05T14:00:00Z",
+                "count": 250,
+            },
+        ]
+        response = self.client.post(
+            "/api/v2/sync/Steps", headers=self.auth(), json={"data": records}
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.get("/api/v2/analytics/devices", headers=self.auth())
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["count"], 2)
+
+        by_source = {item["sourcePackage"]: item for item in payload["devices"]}
+        fitbit = by_source["com.fitbit.FitbitMobile"]
+        self.assertEqual(fitbit["identityQuality"], "source_only")
+        self.assertTrue(fitbit["mayCombinePhysicalDevices"])
+        self.assertEqual(fitbit["recordingMethods"][0]["label"], "automatically_recorded")
+
+        phone = by_source["com.android.healthconnect.phone.test"]
+        self.assertEqual(phone["identityQuality"], "explicit_model")
+        self.assertFalse(phone["mayCombinePhysicalDevices"])
+        self.assertEqual(phone["device"]["typeLabel"], "phone")
+        self.assertEqual(phone["signals"], {"steps": 1})
+
     def test_config_validation_and_rebuild_queue(self):
         invalid = self.client.put(
             "/api/v2/analytics/config",

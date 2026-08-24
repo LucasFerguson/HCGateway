@@ -136,6 +136,13 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
   `heartRateZoneTestDate`, then queues a new run.
 - `GET /api/v2/analytics/inventory` returns raw counts, date coverage, and
   source packages without decrypting health values.
+- `GET /api/v2/analytics/devices` derives a device/source catalog from raw
+  Health Connect provenance without decrypting health values. Entries include
+  stable observed IDs, descriptions, device type/manufacturer/model when the
+  writing app supplied them, recording-method counts, signal/date coverage,
+  association fields, and an ambiguity flag. A source-only entry can combine
+  multiple physical devices and must not be relabeled as a specific watch
+  without corroborating metadata or a user-supplied date-window rule.
 
 Sync uploads and database-side deletes automatically queue a debounced run.
 

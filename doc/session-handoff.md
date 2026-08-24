@@ -29,6 +29,11 @@ reference, but only `/root/HCGateway` was modified.
   separate `api`, `analytics-worker`, and `db` services.
 - Raw syncs now preserve available Health Connect provenance, including device,
   data origin, recording method, and client-record identity/version.
+- `GET /api/v2/analytics/devices` exposes that provenance as an observed device
+  catalog with stable IDs, descriptions, recording methods, signal/date
+  coverage, record-association fields, and explicit ambiguity markers. It is
+  derived from raw metadata so it cannot become stale. Fitbit records that omit
+  model/type can still combine multiple physical devices.
 - `GET /api/v2/analytics/day?date=YYYY-MM-DD&radius=7` now provides the focused
   day contract (`health-day-v1`), including hourly heart-rate summaries, sleep
   stages, hourly steps, workouts, nearby days, and explicit availability notes.
@@ -132,10 +137,10 @@ uses it.
 
 ## Verification already performed
 
-The current image passes 34 tests covering pipeline, Recovery, and strain behavior,
+The current image passes 35 tests covering pipeline, Recovery, and strain behavior,
 fingerprints, MongoDB idempotency, job revision/lease safety, bearer
 authentication, user isolation, endpoint shape, day shaping, sync activity,
-configuration validation, and daily date ranges:
+configuration validation, daily date ranges, and device-provenance inventory:
 
 ```bash
 docker exec hcgateway_api sh -lc \
