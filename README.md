@@ -12,6 +12,9 @@ here for known issues and open work, and update it as items are resolved.
 Context: this repo contains the mobile client, REST API, MongoDB configuration,
 and the background analytics backend for a self-hosted health dashboard.
 
+For the current implementation checkpoint and recommended next work, start with
+[doc/session-handoff.md](doc/session-handoff.md).
+
 - [x] **Backend analytics engine.** Ported the dashboard's
   `health-analytics-v6` TypeScript behavior to Python, including multi-device
   sleep reconciliation, daily metrics, sleep debt/consistency, and experimental
