@@ -15,6 +15,10 @@ except: pass
 app = Flask(__name__)
 CORS(app)
 
+@app.get('/health')
+def health():
+    return {'status': 'ok'}, 200
+
 # deprecate v1 for security reasons
 # from apiVersions.v1 import init_app as init_v1
 # init_v1(app)
@@ -22,4 +26,6 @@ CORS(app)
 from apiVersions.v2 import init_app as init_v2
 init_v2(app)
 
-app.run(host=os.environ.get('APP_HOST', '0.0.0.0'), port=int(os.environ.get('APP_PORT', 6644)), debug=bool(os.environ.get('APP_DEBUG', False)))
+if __name__ == '__main__':
+    debug = os.environ.get('APP_DEBUG', 'false').lower() in ('1', 'true', 'yes', 'on')
+    app.run(host=os.environ.get('APP_HOST', '0.0.0.0'), port=int(os.environ.get('APP_PORT', 6644)), debug=debug)

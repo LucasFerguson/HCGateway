@@ -1,19 +1,45 @@
 
 services:
   api:
-    image: ghcr.io/coolcodersj/hcgateway:latest
+    build:
+      context: ./api
+    image: hcgateway-api:local
     ports:
       - "6644:6644"
     env_file:
       - ./api/.env
     container_name: hcgateway_api
-    restart: always
+    restart: unless-stopped
     volumes:
       - ./api/service-account.json:/app/service-account.json
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://127.0.0.1:6644/health', timeout=3).raise_for_status()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  analytics-worker:
+    build:
+      context: ./api
+    image: hcgateway-api:local
+    command: ["python", "-m", "analytics_engine.worker"]
+    env_file:
+      - ./api/.env
+    container_name: hcgateway_analytics_worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
 
   db:
-    image: mongo
-    restart: always
+    # MongoDB builds with SERVER-121912's kernel guard cannot start on the
+    # host's 6.19+ kernel. This is the previously deployed, compatible 8.0.8
+    # image pinned by digest so a future tag update cannot break restarts.
+    image: mongo:8.0.8@sha256:2c5f154f4e47ef5008c53ff0c9006b6f5c7d6b119c96015aba4136c50ef48b98
+    restart: unless-stopped
     ports:
       - "27017:27017"
     volumes:
@@ -21,4 +47,9 @@ services:
     container_name: hcgateway_db
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
-      MONGO_INITDB_ROOT_PASSWORD: example
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?Set MONGO_INITDB_ROOT_PASSWORD in the root .env file}
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
