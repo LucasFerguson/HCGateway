@@ -61,6 +61,25 @@ For the current implementation checkpoint and recommended next work, start with
     bundled connect-client), or verify the permission appears in Health
     Connect's app settings. Document findings here.
 
+- [x] **Android sync tolerates malformed records and tracks local coverage.**
+  Done in [app/App.js](app/App.js). Upload batches now pre-filter records with
+  impossible timestamps, such as `endTime` before `startTime`, and recursively
+  split any server-rejected batch to isolate the bad record instead of losing
+  the rest of the batch. The in-app sync panel reports invalid/skipped records.
+
+  The app also keeps an advisory local `syncedDaysByType` map in AsyncStorage
+  so repeated full-history syncs can skip days it has already uploaded. This
+  tracker is intentionally local and can be stale after reinstall, app data
+  reset, or major changes; the app includes both a **Force re-upload locally
+  tracked days** toggle to slam data back into the server and a **Reset Local
+  Day Tracker** button. Duplicate raw records are safe because the server
+  upserts by Health Connect record ID.
+
+  The **Refresh Server Inventory** button calls
+  `GET /api/v2/analytics/inventory` and displays high-level raw database
+  coverage, including total records, overall range, and Steps range/count when
+  present.
+
 
 # HCGateway
 HCGateway is a platform to let developers connect to the Health Connect API on Android via a REST API. You can view the documentation for the REST API [here](https://hcgateway.shuchir.dev/)
@@ -175,7 +194,23 @@ hcgateway_[user_id]: string {
 The documentation for the REST API can be found at https://hcgateway.shuchir.dev/
 
 ## Mobile Application
-The mobile application is a simple Android application that pings the server every 2 hours (customizable) to send data. It starts a foreground service to do this, and the service will run even if the application is closed. The application is written in React Native.
+The mobile application is a React Native Android app that syncs Health Connect
+records to the server every 2 hours by default. It starts a foreground service
+for recurring sync work.
+
+The sync path is intentionally defensive:
+
+- Health Connect reads are paginated.
+- Uploads are chunked and awaited.
+- A failed batch is split to isolate malformed records so the rest can still
+  reach the server.
+- The app only advances its successful sync checkpoint after confirmed server
+  uploads.
+- The status screen shows per-type progress, invalid records skipped, locally
+  skipped records, server inventory, and local synced-day coverage.
+- The local synced-day tracker is only an optimization. Use **Force re-upload
+  locally tracked days** when you want to re-send everything in the selected
+  window.
 
 ## Self Hosting
 You can self host the server and database for full control. However, if you'd like to push from your own server, you must build the mobile application yourself. You can find the instructions to build the mobile application below. This is because the app is packaged with the firebase key, and cannot change it dynamically. Again, firebase is only necessary if you want to push from your own server.

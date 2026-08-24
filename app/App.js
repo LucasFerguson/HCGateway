@@ -104,6 +104,9 @@ let lastSyncError = null;
 let taskDelay = 7200 * 1000; // 2 hours
 let fullSyncMode = true; // Default to full history sync (see historyDays)
 let historyDays = 30; // How many days back a full sync reaches. Health Connect
+let forceResyncSyncedDays = false;
+let syncedDaysByType = {};
+let syncInventory = null;
 // caps reads at 30 days unless the READ_HEALTH_DATA_HISTORY permission is
 // granted, after which older data can be read. See requestHistoryPermission().
 let syncInFlight = null;
@@ -114,6 +117,7 @@ const READ_PERMISSIONS = RECORD_TYPES.map(recordType => ({ accessType: 'read', r
 const PAGE_SIZE = 1000;
 const UPLOAD_BATCH_SIZE = 250;
 const INCREMENTAL_OVERLAP_MS = 10 * 60 * 1000;
+const SYNCED_DAYS_KEY = 'syncedDaysByType';
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 const HEALTH_HISTORY_PERMISSION = 'android.permission.health.READ_HEALTH_DATA_HISTORY';
@@ -175,8 +179,12 @@ let syncStatus = {
   failedTypes: [],
   pagesRead: 0,
   uploadRequests: 0,
+  invalidRecords: 0,
+  skippedSyncedRecords: 0,
+  syncedDaysUpdated: 0,
   windowStart: null,
   windowEnd: null,
+  forceResyncSyncedDays,
   historyPermissionGranted: null,
   backgroundPermissionGranted: null,
   lastSuccessfulSyncAt,
@@ -194,6 +202,7 @@ const STATUS_BADGE = {
   failed: { label: 'failed', color: '#c62828' },
   permission_missing: { label: 'no access', color: '#ef6c00' },
   skipped: { label: 'none', color: '#bdbdbd' },
+  locally_synced: { label: 'synced', color: '#607d8b' },
 };
 const notifySyncStatus = () => { try { if (syncStatusListener) syncStatusListener(); } catch (e) { console.log(e) } };
 const setTypeStatus = (type, patch) => {
@@ -274,6 +283,27 @@ get('historyDays')
     }
   })
 
+get('forceResyncSyncedDays')
+  .then(res => {
+    if (res !== null) {
+      forceResyncSyncedDays = res === 'true';
+    }
+  })
+
+get(SYNCED_DAYS_KEY)
+  .then(res => {
+    if (res && typeof res === 'object') {
+      syncedDaysByType = res;
+    }
+  })
+
+get('syncInventory')
+  .then(res => {
+    if (res && typeof res === 'object') {
+      syncInventory = res;
+    }
+  })
+
 const askForPermissions = async () => {
   const isInitialized = await initialize();
 
@@ -347,6 +377,119 @@ const chunkArray = (items, size) => {
   return chunks;
 };
 
+const formatLocalDateKey = (date) => {
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const recordStartTime = (record) => record.time || record.startTime || null;
+const recordEndTime = (record) => record.endTime || record.time || record.startTime || null;
+
+const dateKeysForRecord = (record) => {
+  const start = recordStartTime(record);
+  const end = recordEndTime(record);
+  const first = formatLocalDateKey(start);
+  const last = formatLocalDateKey(end);
+  if (!first) return [];
+  if (!last || first === last) return [first];
+
+  const keys = [];
+  const cursor = new Date(start);
+  cursor.setHours(0, 0, 0, 0);
+  const lastDay = new Date(end);
+  lastDay.setHours(0, 0, 0, 0);
+  while (cursor.getTime() <= lastDay.getTime()) {
+    keys.push(formatLocalDateKey(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return keys.filter(Boolean);
+};
+
+const isRecordIntervalValid = (record) => {
+  const start = recordStartTime(record);
+  const end = recordEndTime(record);
+  if (!start) return { valid: false, reason: 'missing start/time' };
+  const startMs = new Date(start).getTime();
+  const endMs = end ? new Date(end).getTime() : startMs;
+  if (Number.isNaN(startMs) || Number.isNaN(endMs)) {
+    return { valid: false, reason: 'invalid start/end timestamp' };
+  }
+  if (endMs < startMs) {
+    return { valid: false, reason: `end before start (${start} > ${end})` };
+  }
+  return { valid: true };
+};
+
+const summarizeDates = (days) => {
+  const sorted = [...new Set(days)].sort();
+  if (sorted.length === 0) return 'none';
+  if (sorted.length === 1) return sorted[0];
+  return `${sorted[0]} to ${sorted[sorted.length - 1]} (${sorted.length} days)`;
+};
+
+const countTrackedDays = (dayMapByType) => {
+  const allDays = new Set();
+  Object.values(dayMapByType || {}).forEach(dayMap => {
+    Object.keys(dayMap || {}).forEach(day => allDays.add(day));
+  });
+  return allDays.size;
+};
+
+const trackedDaysSummary = (dayMapByType) => {
+  const allDays = new Set();
+  Object.values(dayMapByType || {}).forEach(dayMap => {
+    Object.keys(dayMap || {}).forEach(day => allDays.add(day));
+  });
+  return summarizeDates([...allDays]);
+};
+
+const splitRecordsForUpload = (recordType, records) => {
+  const dayMap = syncedDaysByType[recordType] || {};
+  const valid = [];
+  const invalid = [];
+  const locallySynced = [];
+
+  for (const record of records) {
+    const interval = isRecordIntervalValid(record);
+    if (!interval.valid) {
+      invalid.push({ record, reason: interval.reason });
+      continue;
+    }
+
+    const days = dateKeysForRecord(record);
+    const alreadySynced = !forceResyncSyncedDays && days.length > 0 && days.every(day => dayMap[day]);
+    if (alreadySynced) {
+      locallySynced.push(record);
+    } else {
+      valid.push(record);
+    }
+  }
+
+  return { valid, invalid, locallySynced };
+};
+
+const persistSyncedDays = async (recordType, records) => {
+  if (records.length === 0) return 0;
+  const dayMap = { ...(syncedDaysByType[recordType] || {}) };
+  let changed = 0;
+  const now = new Date().toISOString();
+  for (const record of records) {
+    for (const day of dateKeysForRecord(record)) {
+      if (!dayMap[day]) changed += 1;
+      dayMap[day] = now;
+    }
+  }
+  if (changed > 0) {
+    syncedDaysByType = { ...syncedDaysByType, [recordType]: dayMap };
+    await setObj(SYNCED_DAYS_KEY, syncedDaysByType);
+  }
+  return changed;
+};
+
 const formatSyncError = (err) => {
   if (!err) return 'unknown error';
   if (err.response) return `${err.response.status}: ${JSON.stringify(err.response.data)}`;
@@ -383,6 +526,23 @@ const resetForegroundMessage = () => {
     })
   }
   catch { }
+};
+
+const refreshSyncInventory = async () => {
+  if (!login) return null;
+  try {
+    const response = await axios.get(`${apiBase}/api/v2/analytics/inventory`, {
+      headers: {
+        "Authorization": `Bearer ${login}`
+      }
+    });
+    syncInventory = { ...response.data, fetchedAt: new Date().toISOString() };
+    await setObj('syncInventory', syncInventory);
+    return syncInventory;
+  } catch (err) {
+    console.log('failed to refresh sync inventory', err);
+    throw err;
+  }
 };
 
 const getReadPermissionSet = async () => {
@@ -443,20 +603,76 @@ const postSyncBatch = async (recordType, batch) => {
   }
 };
 
+const uploadBatchIsolatingBadRecords = async (recordType, batch) => {
+  try {
+    await postSyncBatch(recordType, batch);
+    return { uploaded: batch, rejected: [] };
+  } catch (err) {
+    if (batch.length === 1) {
+      return { uploaded: [], rejected: [{ record: batch[0], reason: formatSyncError(err) }] };
+    }
+    const midpoint = Math.ceil(batch.length / 2);
+    const left = await uploadBatchIsolatingBadRecords(recordType, batch.slice(0, midpoint));
+    const right = await uploadBatchIsolatingBadRecords(recordType, batch.slice(midpoint));
+    return {
+      uploaded: [...left.uploaded, ...right.uploaded],
+      rejected: [...left.rejected, ...right.rejected],
+    };
+  }
+};
+
 const uploadRecords = async (recordType, records) => {
-  if (records.length === 0) {
-    setTypeStatus(recordType, { state: 'skipped' });
+  const { valid, invalid, locallySynced } = splitRecordsForUpload(recordType, records);
+  syncStatus.invalidRecords += invalid.length;
+  syncStatus.skippedSyncedRecords += locallySynced.length;
+
+  if (invalid.length > 0) {
+    console.log(`${recordType}: skipped ${invalid.length} invalid records`, invalid.slice(0, 5).map(item => item.reason));
+  }
+
+  if (valid.length === 0) {
+    const state = locallySynced.length > 0 ? 'locally_synced' : 'skipped';
+    const details = [];
+    if (invalid.length > 0) details.push(`${invalid.length} invalid skipped`);
+    if (locallySynced.length > 0) details.push(`${locallySynced.length} already tracked locally`);
+    setTypeStatus(recordType, {
+      state,
+      invalid: invalid.length,
+      locallySynced: locallySynced.length,
+      error: details.join('; ') || null,
+    });
     return 0;
   }
 
   let uploaded = 0;
-  for (const batch of chunkArray(records, UPLOAD_BATCH_SIZE)) {
-    await postSyncBatch(recordType, batch);
-    uploaded += batch.length;
-    syncStatus.numRecordsSynced += batch.length;
-    setTypeStatus(recordType, { synced: uploaded, state: uploaded >= records.length ? 'done' : 'syncing' });
+  let rejected = [];
+  for (const batch of chunkArray(valid, UPLOAD_BATCH_SIZE)) {
+    const uploadResult = await uploadBatchIsolatingBadRecords(recordType, batch);
+    rejected = [...rejected, ...uploadResult.rejected];
+    const uploadedBatch = uploadResult.uploaded;
+    uploaded += uploadedBatch.length;
+    syncStatus.numRecordsSynced += uploadedBatch.length;
+    const daysChanged = await persistSyncedDays(recordType, uploadedBatch);
+    syncStatus.syncedDaysUpdated += daysChanged;
+    const totalSkipped = invalid.length + locallySynced.length + rejected.length;
+    const done = (uploaded + totalSkipped) >= records.length;
+    const error = [
+      invalid.length > 0 ? `${invalid.length} invalid skipped` : null,
+      locallySynced.length > 0 ? `${locallySynced.length} already tracked locally` : null,
+      rejected.length > 0 ? `${rejected.length} rejected by server` : null,
+    ].filter(Boolean).join('; ') || null;
+    setTypeStatus(recordType, {
+      synced: uploaded,
+      invalid: invalid.length + rejected.length,
+      locallySynced: locallySynced.length,
+      error,
+      state: done ? 'done' : 'syncing',
+    });
     updateForegroundProgress(syncStatus.numRecordsSynced, syncStatus.numRecords);
     notifySyncStatus();
+  }
+  if (rejected.length > 0) {
+    console.log(`${recordType}: server rejected ${rejected.length} isolated records`, rejected.slice(0, 5).map(item => item.reason));
   }
   return uploaded;
 };
@@ -553,8 +769,12 @@ const runSync = async (customStartTime, customEndTime) => {
     failedTypes: [],
     pagesRead: 0,
     uploadRequests: 0,
+    invalidRecords: 0,
+    skippedSyncedRecords: 0,
+    syncedDaysUpdated: 0,
     windowStart: startTime,
     windowEnd: syncEndTime,
+    forceResyncSyncedDays,
     historyPermissionGranted,
     backgroundPermissionGranted,
     lastSuccessfulSyncAt,
@@ -628,6 +848,9 @@ const runSync = async (customStartTime, customEndTime) => {
       text1: 'Sync completed',
       text2: `${syncStatus.numRecordsSynced} records uploaded.`,
     });
+    refreshSyncInventory()
+      .then(() => notifySyncStatus())
+      .catch(err => console.log('post-sync inventory refresh failed', err));
   } else {
     lastSyncError = firstError || 'one or more record types failed';
     await setPlain('lastSyncError', lastSyncError);
@@ -698,6 +921,9 @@ export default Sentry.wrap(function App() {
   const [showDatePickerModal, setShowDatePickerModal] = React.useState(false);
   const defaultCalStyles = useDefaultStyles();
   const [syncStatusView, setSyncStatusView] = React.useState(syncStatus);
+  const [forceResyncView, setForceResyncView] = React.useState(forceResyncSyncedDays);
+  const [syncedDaysView, setSyncedDaysView] = React.useState(syncedDaysByType);
+  const [inventoryView, setInventoryView] = React.useState(syncInventory);
 
   // Subscribe to the module-level sync status store so the in-app status UI
   // updates live as sync() progresses. We copy into React state (shallow +
@@ -705,8 +931,22 @@ export default Sentry.wrap(function App() {
   React.useEffect(() => {
     syncStatusListener = () => {
       setSyncStatusView({ ...syncStatus, types: { ...syncStatus.types } });
+      setSyncedDaysView({ ...syncedDaysByType });
+      setInventoryView(syncInventory ? { ...syncInventory } : null);
     };
     return () => { if (syncStatusListener) syncStatusListener = null; };
+  }, [])
+
+  React.useEffect(() => {
+    get('forceResyncSyncedDays').then(res => {
+      if (res !== null) setForceResyncView(res === 'true');
+    });
+    get(SYNCED_DAYS_KEY).then(res => {
+      if (res && typeof res === 'object') setSyncedDaysView(res);
+    });
+    get('syncInventory').then(res => {
+      if (res && typeof res === 'object') setInventoryView(res);
+    });
   }, [])
 
   const loginFunc = async () => {
@@ -834,6 +1074,8 @@ export default Sentry.wrap(function App() {
             <View style={styles.statusMeta}>
               <Text style={styles.statusMetaText}>Window: {syncStatusView.windowStart || '-'} to {syncStatusView.windowEnd || '-'}</Text>
               <Text style={styles.statusMetaText}>Pages read: {syncStatusView.pagesRead || 0} | Upload requests: {syncStatusView.uploadRequests || 0}</Text>
+              <Text style={styles.statusMetaText}>Invalid skipped: {syncStatusView.invalidRecords || 0} | Locally skipped: {syncStatusView.skippedSyncedRecords || 0}</Text>
+              <Text style={styles.statusMetaText}>Local days updated: {syncStatusView.syncedDaysUpdated || 0} | Force re-upload: {syncStatusView.forceResyncSyncedDays ? 'on' : 'off'}</Text>
               <Text style={styles.statusMetaText}>History access: {syncStatusView.historyPermissionGranted === null ? 'not needed' : (syncStatusView.historyPermissionGranted ? 'granted' : 'limited to 30 days')}</Text>
               <Text style={styles.statusMetaText}>Background read: {syncStatusView.backgroundPermissionGranted === null ? 'unknown' : (syncStatusView.backgroundPermissionGranted ? 'granted' : 'not granted')}</Text>
               {(syncStatusView.failedTypes || []).length > 0 && (
@@ -863,6 +1105,11 @@ export default Sentry.wrap(function App() {
                       {info.count > 0 && (
                         <Text style={styles.typeCount}>{info.synced}/{info.count}</Text>
                       )}
+                      {(info.invalid || info.locallySynced) > 0 && (
+                        <Text style={styles.typeCount}>
+                          {info.invalid ? ` bad ${info.invalid}` : ''}{info.locallySynced ? ` local ${info.locallySynced}` : ''}
+                        </Text>
+                      )}
                       <View style={[styles.badge, { backgroundColor: badge.color }]}>
                         <Text style={styles.badgeText}>{badge.label}</Text>
                       </View>
@@ -870,6 +1117,45 @@ export default Sentry.wrap(function App() {
                   </View>
                 );
               })}
+            </View>
+          </View>
+
+          <View style={styles.statusPanel}>
+            <Text style={styles.statusHeader}>Synced Coverage</Text>
+            <Text style={styles.statusMetaText}>Local tracked days: {trackedDaysSummary(syncedDaysView)}</Text>
+            <Text style={styles.statusMetaText}>Tracked record types: {Object.keys(syncedDaysView || {}).length}</Text>
+            {inventoryView && (
+              <View style={styles.statusMeta}>
+                <Text style={styles.statusMetaText}>Server inventory: {inventoryView.totalRecords || 0} records</Text>
+                <Text style={styles.statusMetaText}>Server range: {inventoryView.earliest || '-'} to {inventoryView.latest || '-'}</Text>
+                <Text style={styles.statusMetaText}>Inventory fetched: {inventoryView.fetchedAt || 'unknown'}</Text>
+                {!!inventoryView.signals?.steps && (
+                  <Text style={styles.statusMetaText}>Steps on server: {inventoryView.signals.steps.records} records, {inventoryView.signals.steps.earliest || '-'} to {inventoryView.signals.steps.latest || '-'}</Text>
+                )}
+              </View>
+            )}
+            <View style={{ marginTop: 8 }}>
+              <Button
+                title="Refresh Server Inventory"
+                disabled={syncStatusView.running}
+                onPress={async () => {
+                  try {
+                    const inventory = await refreshSyncInventory();
+                    setInventoryView(inventory);
+                    Toast.show({
+                      type: 'success',
+                      text1: 'Server inventory refreshed',
+                      text2: `${inventory.totalRecords || 0} raw records on server.`,
+                    });
+                  } catch (err) {
+                    Toast.show({
+                      type: 'error',
+                      text1: 'Inventory refresh failed',
+                      text2: err.message,
+                    });
+                  }
+                }}
+              />
             </View>
           </View>
 
@@ -952,6 +1238,42 @@ export default Sentry.wrap(function App() {
                   });
                   forceUpdate();
                 }
+              }}
+            />
+          </View>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginVertical: 10 }}>
+            <Text style={{ fontSize: 15, flex: 1 }}>Force re-upload locally tracked days:</Text>
+            <Switch
+              value={forceResyncView}
+              onValueChange={async (value) => {
+                forceResyncSyncedDays = value;
+                setForceResyncView(value);
+                await setPlain('forceResyncSyncedDays', value.toString());
+                Toast.show({
+                  type: 'info',
+                  text1: value ? 'Force re-upload enabled' : 'Local day skipping enabled',
+                  text2: value ? 'Syncs will slam matching days into the server again.' : 'Already tracked days can be skipped locally.',
+                });
+                forceUpdate();
+              }}
+            />
+          </View>
+
+          <View style={{ marginBottom: 8 }}>
+            <Button
+              title="Reset Local Day Tracker"
+              color="#795548"
+              disabled={syncStatusView.running || countTrackedDays(syncedDaysView) === 0}
+              onPress={async () => {
+                syncedDaysByType = {};
+                setSyncedDaysView({});
+                await setObj(SYNCED_DAYS_KEY, {});
+                Toast.show({
+                  type: 'success',
+                  text1: 'Local day tracker reset',
+                  text2: 'The next sync can rebuild local coverage from uploads.',
+                });
               }}
             />
           </View>
