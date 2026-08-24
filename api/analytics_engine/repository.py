@@ -78,6 +78,45 @@ def _weight(document, data):
     return {"id": record_id, "source": source, "observedAt": start, "kilograms": kilograms}
 
 
+def _heart_rate(document, data):
+    record_id, source, start, end = _envelope(document, require_end=True)
+    samples = []
+    for sample in data.get("samples", []):
+        observed_at = sample.get("time")
+        parse_instant(observed_at)
+        bpm = _number(sample.get("beatsPerMinute"), "heart rate", strictly_positive=True)
+        samples.append({"observedAt": observed_at, "bpm": bpm})
+    return {"id": record_id, "source": source, "startAt": start, "endAt": end, "samples": samples}
+
+
+def _respiratory_rate(document, data):
+    record_id, source, start, _ = _envelope(document)
+    breaths_per_minute = _number(data.get("rate"), "respiratory rate", strictly_positive=True)
+    return {"id": record_id, "source": source, "observedAt": start, "breathsPerMinute": breaths_per_minute}
+
+
+def _oxygen_saturation(document, data):
+    record_id, source, start, _ = _envelope(document)
+    percentage = _number(data.get("percentage"), "oxygen saturation", minimum=0)
+    if percentage > 100:
+        raise ValueError("oxygen saturation is above 100 percent")
+    return {"id": record_id, "source": source, "observedAt": start, "percentage": percentage}
+
+
+def _exercise_session(document, data):
+    record_id, source, start, end = _envelope(document, require_end=True)
+    exercise_type = _number(data.get("exerciseType"), "exercise type", integer=True)
+    return {
+        "id": record_id,
+        "source": source,
+        "startAt": start,
+        "endAt": end,
+        "exerciseType": exercise_type,
+        "title": data.get("title"),
+        "notes": data.get("notes"),
+    }
+
+
 MAPPERS = {
     "sleepSession": ("sleepSessions", _sleep),
     "steps": ("steps", _steps),
@@ -85,11 +124,29 @@ MAPPERS = {
     "totalCaloriesBurned": ("totalCalories", _energy),
     "restingHeartRate": ("restingHeartRates", _resting_heart_rate),
     "weight": ("weights", _weight),
+    "heartRate": ("heartRates", _heart_rate),
+    "respiratoryRate": ("respiratoryRates", _respiratory_rate),
+    "oxygenSaturation": ("oxygenSaturations", _oxygen_saturation),
+    "exerciseSession": ("exerciseSessions", _exercise_session),
 }
 
 
 def empty_raw_health_data():
-    return {name: [] for name in ("sleepSessions", "steps", "activeCalories", "totalCalories", "restingHeartRates", "weights")}
+    return {
+        name: []
+        for name in (
+            "sleepSessions",
+            "steps",
+            "activeCalories",
+            "totalCalories",
+            "restingHeartRates",
+            "weights",
+            "heartRates",
+            "respiratoryRates",
+            "oxygenSaturations",
+            "exerciseSessions",
+        )
+    }
 
 
 def load_raw_health_data(user_db, cipher):

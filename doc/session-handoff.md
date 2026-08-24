@@ -14,7 +14,8 @@ Dashboard. The TypeScript implementation in
 `/root/health-connect-dashboard-for-fitbit` was used as the behavioral
 reference, but only `/root/HCGateway` was modified.
 
-- `api/analytics_engine/pipeline.py` ports `health-analytics-v6` to Python.
+- `api/analytics_engine/pipeline.py` ports `health-analytics-v6` to Python;
+  the current frontend day-view contract is versioned `health-analytics-v7`.
 - `api/analytics_engine/repository.py` decrypts and normalizes sleep sessions,
   steps, active/total calories, resting heart rate, and weight.
 - `api/analytics_engine/worker.py` runs independently from Flask and claims

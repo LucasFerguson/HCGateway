@@ -83,6 +83,8 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(set(payload), {"generatedAt", "source", "sleepSessions", "analytics"})
         self.assertEqual(payload["analytics"]["steps"]["daily"][0]["value"], 1234)
+        self.assertNotIn("dayViews", payload["analytics"])
+        self.assertNotIn("daily", payload["analytics"]["strain"])
         self.assertIn("ETag", response.headers)
 
         other = self.mongo["hcgateway"]["users"].find_one({"_id": self.other_user_id})
@@ -108,6 +110,23 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
             401,
         )
 
+    def test_day_contract_includes_values_and_explicit_missing_notes(self):
+        response = self.client.get(
+            "/api/v2/analytics/day?date=2026-01-01&radius=1",
+            headers=self.auth(),
+        )
+        payload = response.get_json()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload["contractVersion"], "health-day-v1")
+        self.assertEqual(len(payload["nearbyDays"]), 3)
+        self.assertEqual(payload["day"]["supportingMetrics"]["steps"]["value"], 1234)
+        self.assertEqual(payload["day"]["headlineScores"]["recovery"]["status"], "not_implemented")
+        self.assertTrue(any(
+            note["field"] == "headlineScores.recovery"
+            for note in payload["day"]["availabilityNotes"]
+        ))
+
     def test_config_validation_and_rebuild_queue(self):
         invalid = self.client.put(
             "/api/v2/analytics/config",
@@ -123,6 +142,13 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(accepted.status_code, 202)
         self.assertEqual(accepted.get_json()["job"]["status"], "queued")
+
+        invalid_zones = self.client.put(
+            "/api/v2/analytics/config",
+            headers=self.auth(),
+            json={"heartRateZoneThresholds": [100, 120, 110, 160, 180, 200]},
+        )
+        self.assertEqual(invalid_zones.status_code, 400)
 
 
 if __name__ == "__main__":

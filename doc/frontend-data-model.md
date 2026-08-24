@@ -1,8 +1,8 @@
 # Analytics API and frontend data model
 
 HCGateway keeps encrypted Health Connect records as its source of truth. A
-separate Python worker decrypts the six currently supported analytics signals,
-normalizes them, runs `health-analytics-v6`, and writes encrypted, immutable
+separate Python worker decrypts the supported analytics signals, normalizes
+them, runs `health-analytics-v7`, and writes encrypted, immutable
 prepared runs back to each user's MongoDB database.
 
 The implementation is a behavioral port of the dashboard repository's
@@ -13,6 +13,31 @@ WHOOP, Pixel/Fitbit, or Google Fit records itself.
 
 All endpoints require `Authorization: Bearer <token>` and are scoped to the
 authenticated user's `hcgateway_<user-id>` database.
+
+### `GET /api/v2/analytics/day?date=YYYY-MM-DD&radius=7`
+
+This is the preferred endpoint for the health dashboard's day screen. It returns one
+fully shaped day plus low-resolution summaries for up to seven days on each
+side. The date defaults to today in the configured home timezone.
+
+Every requested UI metric is present even when its value is not. Metric objects
+use `status` values such as `available`, `partial`, `missing`,
+`insufficient_data`, `not_implemented`, or `blocked`, and include a `note`
+when the frontend should explain an absence. The focused day also has a flat
+`availabilityNotes` list for banners, diagnostics, or tooltips.
+
+The day contract includes:
+
+- sleep duration, window, stage totals, and stage segments;
+- a fixed-target sleep-need percentage clearly marked `partial`;
+- experimental cardiovascular strain and its quality metadata;
+- hourly heart-rate min/p25/mean/p75/max candlesticks;
+- hourly steps, workouts, daily supporting metrics, and latest observation;
+- explicit placeholders for Recovery, strain target, schedule blocks, HRV,
+  skin-temperature deviation, and bed/wake preferences.
+
+Recovery and dynamic sleep need are not inferred from incomplete inputs. A
+missing value is represented by a status and reason, never by a numeric zero.
 
 ### `GET /api/v2/analytics/snapshot`
 
@@ -25,7 +50,7 @@ dashboard contract unchanged:
   "source": "health-connect",
   "sleepSessions": [],
   "analytics": {
-    "algorithmVersion": "health-analytics-v6",
+    "algorithmVersion": "health-analytics-v7",
     "sourceFingerprint": "...",
     "configurationFingerprint": "...",
     "processedAt": "...",
@@ -39,7 +64,8 @@ dashboard contract unchanged:
     "activeCalories": {},
     "totalCalories": {},
     "restingHeartRate": {},
-    "weight": {}
+    "weight": {},
+    "strain": {}
   }
 }
 ```
@@ -47,6 +73,11 @@ dashboard contract unchanged:
 The response has a run-specific `ETag` and `Cache-Control: private, no-cache`.
 A `404` means the first background run is not ready yet; inspect the status
 endpoint and retry.
+
+Detailed `dayViews`, daily strain, and workout-strain timelines are deliberately
+excluded from this legacy monolithic snapshot. They are stored per date and
+served by `/api/v2/analytics/day`, avoiding MongoDB's 16 MiB document limit
+after encryption.
 
 ### `GET /api/v2/analytics/daily`
 
@@ -56,7 +87,7 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
 
 ```json
 {
-  "runId": "health-analytics-v6:<source>:<configuration>",
+  "runId": "health-analytics-v7:<source>:<configuration>",
   "count": 1,
   "days": [
     {
@@ -69,7 +100,9 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
       "activeCalories": null,
       "totalCalories": null,
       "restingHeartRate": null,
-      "weight": null
+      "weight": null,
+      "strain": null,
+      "dayView": null
     }
   ]
 }
@@ -82,10 +115,11 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
 - `POST /api/v2/analytics/rebuild` queues a rebuild and returns `202`; it never
   blocks a web worker.
 - `GET /api/v2/analytics/config` returns the effective home timezone, sleep
-  target, and birth date.
+  target, birth date, and optional personal heart-rate-zone calibration.
 - `PUT /api/v2/analytics/config` accepts `homeTimeZone` (IANA name),
-  `sleepTargetMinutes` (240–720), and `birthDate` (`YYYY-MM-DD` in the past),
-  then queues a new run.
+  `sleepTargetMinutes` (240–720), `birthDate` (`YYYY-MM-DD` in the past), six
+  increasing `heartRateZoneThresholds`, and an optional
+  `heartRateZoneTestDate`, then queues a new run.
 - `GET /api/v2/analytics/inventory` returns raw counts, date coverage, and
   source packages without decrypting health values.
 
@@ -95,7 +129,7 @@ Sync uploads and database-side deletes automatically queue a debounced run.
 
 - Sleep sessions with at least 80% overlap relative to the shorter recording
   are grouped. The longest is canonical while every device recording remains
-  available for comparison.
+  available for comparison. Sleep belongs to the local date on which it ends.
 - Sleep stages exclude awake and unknown time. If stages are absent, the full
   session duration is used. Naps stay separate and still contribute to daily
   sleep.
@@ -109,6 +143,10 @@ Sync uploads and database-side deletes automatically queue a debounced run.
 - Healthspan is explicitly an experimental estimate, not a clinical prediction.
   It uses available sleep, steps, resting-heart-rate, and weight factors; a
   birth date is required for age-based outputs.
+- Strain is an explicitly non-proprietary cardiovascular estimate. It
+  integrates gap-limited heart-rate effort and logarithmically maps load to
+  0–21. It withholds scores when calibration or coverage is inadequate and
+  does not claim WHOOP parity or muscular-load measurement.
 
 Source identity is the Health Connect data-origin package (for example WHOOP or
 Fitbit/Pixel Watch). New syncs also preserve device and recording provenance on

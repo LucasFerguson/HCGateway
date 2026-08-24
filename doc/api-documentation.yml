@@ -209,6 +209,32 @@ paths:
                   runId: {type: string}
                   count: {type: integer}
                   days: {type: array, items: {type: object}}
+  "/api/v2/analytics/day":
+    get:
+      tags: [Analytics]
+      operationId: getHealthDayDashboard
+      description: >-
+        Return the frontend-oriented health day contract plus nearby-day summaries.
+        Every requested metric includes an explicit availability status and missing-data note.
+      security:
+      - bearerAuth: []
+      parameters:
+      - {in: query, name: date, schema: {type: string, format: date}, description: Defaults to today in the configured home timezone.}
+      - {in: query, name: radius, schema: {type: integer, minimum: 0, maximum: 7, default: 7}}
+      responses:
+        '200':
+          description: A shaped day view and low-resolution nearby days.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contractVersion, day, nearbyDays, runId]
+                properties:
+                  contractVersion: {type: string, example: health-day-v1}
+                  day: {type: object}
+                  nearbyDays: {type: array, items: {type: object}}
+                  runId: {type: string}
+        '404': {description: The first background analytics run is not ready.}
   "/api/v2/analytics/status":
     get:
       tags: [Analytics]
@@ -250,6 +276,13 @@ paths:
                 homeTimeZone: {type: string, example: America/Los_Angeles}
                 sleepTargetMinutes: {type: integer, minimum: 240, maximum: 720}
                 birthDate: {type: string, format: date, nullable: true}
+                heartRateZoneThresholds:
+                  type: array
+                  minItems: 6
+                  maxItems: 6
+                  items: {type: number, minimum: 30, maximum: 240}
+                  description: Increasing BPM thresholds for zone 1 through zone 5 and personal maximum.
+                heartRateZoneTestDate: {type: string, format: date, nullable: true}
       responses:
         '202': {description: Configuration accepted and rebuild queued.}
   "/api/v2/analytics/inventory":

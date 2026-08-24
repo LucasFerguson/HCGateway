@@ -1,4 +1,4 @@
-"""Pure Python port of the dashboard's TypeScript health-analytics-v6 pipeline."""
+"""Health analytics v7: the v6 parity port plus frontend day-view signals."""
 
 import datetime as dt
 import hashlib
@@ -9,9 +9,11 @@ from statistics import median
 from zoneinfo import ZoneInfo
 
 from .context import AnalyticsContext, validate_context
+from .day_dashboard import build_day_views
+from .strain import calculate_strain
 
 
-ALGORITHM_VERSION = "health-analytics-v6"
+ALGORITHM_VERSION = "health-analytics-v7"
 HEALTHSPAN_MODEL_VERSION = "experimental-healthspan-v1"
 SAME_SLEEP_EVENT_OVERLAP_RATIO = 0.8
 DAY_SECONDS = 86_400
@@ -93,6 +95,10 @@ def source_fingerprint(raw):
             "totalCalories",
             "restingHeartRates",
             "weights",
+            "heartRates",
+            "respiratoryRates",
+            "oxygenSaturations",
+            "exerciseSessions",
         )
     }
     return fingerprint(ordered)
@@ -116,7 +122,10 @@ def sleep_minutes(session):
 def reconcile_sleep_events(sessions, context):
     by_date = defaultdict(list)
     for session in sessions:
-        by_date[date_key(session["startAt"], context.homeTimeZone)].append(session)
+        # A dashboard day owns the sleep that ended on that date. This also
+        # keeps same-day naps intuitive while assigning overnight sleep to its
+        # wake date instead of the previous evening.
+        by_date[date_key(session["endAt"], context.homeTimeZone)].append(session)
     events = []
     for date, daily in by_date.items():
         parent = list(range(len(daily)))
@@ -567,7 +576,26 @@ def process_health_data(raw, context=AnalyticsContext()):
     total_calories = aggregate_interval_metric(raw.get("totalCalories", []), "kcal", "energyKcal", context)
     resting_heart_rate = aggregate_point_metric(raw.get("restingHeartRates", []), "bpm", "bpm", "median", context)
     weight = aggregate_point_metric(raw.get("weights", []), "kg", "kilograms", "latest", context)
-    return {
+    heart_rate_records = raw.get("heartRates", [])
+    samples_by_source = defaultdict(list)
+    for record in heart_rate_records:
+        samples_by_source[record["source"]].extend(record.get("samples", []))
+    heart_rate_source = max(samples_by_source, key=lambda source: len(samples_by_source[source]), default=None)
+    heart_rate_samples = samples_by_source.get(heart_rate_source, [])
+    resting_values = sorted(raw.get("restingHeartRates", []), key=lambda item: parse_instant(item["observedAt"]))
+    resting_baseline = median([item["bpm"] for item in resting_values[-90:]]) if resting_values else None
+    strain = calculate_strain(
+        heart_rate_samples,
+        time_zone=context.homeTimeZone,
+        zone_thresholds=context.heartRateZoneThresholds,
+        resting_hr=resting_baseline,
+        historical_samples=heart_rate_samples,
+        workouts=raw.get("exerciseSessions", []),
+    )
+    strain["source"] = heart_rate_source
+    if context.heartRateZoneTestDate and strain.get("calibration"):
+        strain["calibration"]["testDate"] = context.heartRateZoneTestDate
+    analytics = {
         "algorithmVersion": ALGORITHM_VERSION,
         "sourceFingerprint": source_fingerprint(raw),
         "configurationFingerprint": fingerprint(context.as_dict()),
@@ -583,4 +611,7 @@ def process_health_data(raw, context=AnalyticsContext()):
         "totalCalories": total_calories,
         "restingHeartRate": resting_heart_rate,
         "weight": weight,
+        "strain": strain,
     }
+    analytics["dayViews"] = build_day_views(raw, analytics, context)
+    return analytics

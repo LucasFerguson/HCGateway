@@ -44,6 +44,8 @@ def _daily_documents(analytics):
         "totalCalories": analytics["totalCalories"]["daily"],
         "restingHeartRate": analytics["restingHeartRate"]["daily"],
         "weight": analytics["weight"]["daily"],
+        "strain": analytics["strain"]["daily"],
+        "dayView": analytics["dayViews"],
     }
     dates = sorted({item["date"] for values in names.values() for item in values})
     lookup = {name: {item["date"]: item for item in values} for name, values in names.items()}
@@ -71,11 +73,18 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
         upsert=True,
     )
     try:
+        # Detailed day views and per-sample strain timelines live in the
+        # date-indexed collections. Keeping them out of the legacy monolithic
+        # snapshot avoids MongoDB's 16 MiB document limit after encryption.
+        snapshot_analytics = {
+            key: value for key, value in analytics.items() if key != "dayViews"
+        }
+        snapshot_analytics["strain"] = _without(_without(analytics["strain"], "daily"), "workouts")
         snapshot = {
             "generatedAt": analytics["processedAt"],
             "source": "health-connect",
             "sleepSessions": raw["sleepSessions"],
-            "analytics": analytics,
+            "analytics": snapshot_analytics,
         }
         database[SNAPSHOTS].update_one(
             {"_id": run_id},
@@ -108,6 +117,7 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
                 name: {key: value for key, value in analytics[name].items() if key != "daily"}
                 for name in ("steps", "activeCalories", "totalCalories", "restingHeartRate", "weight")
             },
+            "strain": _without(_without(analytics["strain"], "daily"), "workouts"),
         }
         for kind, payload in summaries.items():
             database[SUMMARIES].update_one(
@@ -127,6 +137,8 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
             "dailyTotalCalories": len(analytics["totalCalories"]["daily"]),
             "dailyRestingHeartRate": len(analytics["restingHeartRate"]["daily"]),
             "weightMeasurements": len(analytics["weight"]["daily"]),
+            "dailyStrain": len(analytics["strain"]["daily"]),
+            "dayViews": len(analytics["dayViews"]),
         }
         database[RUNS].update_one(
             {"_id": run_id},

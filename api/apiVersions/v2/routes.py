@@ -14,9 +14,11 @@ ph = PasswordHasher()
 
 from cryptography.fernet import Fernet
 import base64, secrets, datetime
+from zoneinfo import ZoneInfo
 
 from analytics_engine.context import AnalyticsContext, context_for_user, validate_context
 from analytics_engine.crypto import cipher_for_user
+from analytics_engine.day_dashboard import empty_day
 from analytics_engine.jobs import enqueue_job
 from analytics_engine.service import inventory_for_user
 from analytics_engine.store import current_metadata, read_daily, read_snapshot
@@ -307,7 +309,10 @@ def analyticsConfig():
     if request.method == 'GET':
         return jsonify(context_for_user(user).as_dict()), 200
     body = request.get_json(silent=True) or {}
-    allowed = {'homeTimeZone', 'sleepTargetMinutes', 'birthDate'}
+    allowed = {
+        'homeTimeZone', 'sleepTargetMinutes', 'birthDate',
+        'heartRateZoneThresholds', 'heartRateZoneTestDate',
+    }
     if set(body) - allowed:
         return jsonify({'error': 'unsupported analytics configuration field'}), 400
     current = context_for_user(user).as_dict()
@@ -358,6 +363,90 @@ def analyticsDaily():
         return jsonify({'error': 'analytics not ready'}), 404
     response = jsonify({'days': daily, 'count': len(daily), 'runId': current['runId']})
     response.set_etag(current['runId'])
+    return response
+
+
+def availability_notes(day):
+    notes = []
+    groups = (
+        ("headlineScores", day.get("headlineScores", {})),
+        ("supportingMetrics", day.get("supportingMetrics", {})),
+    )
+    for group_name, group in groups:
+        for field, value in group.items():
+            if isinstance(value, dict) and value.get("status") not in ("available", "partial"):
+                notes.append({
+                    "field": f"{group_name}.{field}",
+                    "status": value.get("status"),
+                    "note": value.get("note", "Data is unavailable."),
+                })
+    for field in ("schedule", "targetWakeTime", "targetBedTime"):
+        value = day.get("timeline", {}).get(field, {})
+        if value.get("status") not in ("available", "partial"):
+            notes.append({
+                "field": f"timeline.{field}",
+                "status": value.get("status"),
+                "note": value.get("note", "Data is unavailable."),
+            })
+    zones = day.get("heartRateZones", {})
+    if zones.get("status") not in ("available", "partial"):
+        notes.append({"field": "heartRateZones", "status": zones.get("status"), "note": zones.get("note")})
+    return notes
+
+
+@v2.get("/analytics/day")
+def analyticsDay():
+    user, user_db = current_user_and_db()
+    if not user:
+        return jsonify({'error': 'invalid user id'}), 400
+    context = context_for_user(user)
+    try:
+        requested_date = request.args.get('date') or datetime.datetime.now(
+            datetime.timezone.utc
+        ).astimezone(ZoneInfo(context.homeTimeZone)).date().isoformat()
+        center = datetime.date.fromisoformat(requested_date)
+        radius = int(request.args.get('radius', 7))
+        if not 0 <= radius <= 7:
+            raise ValueError('radius must be from 0 to 7')
+    except (TypeError, ValueError):
+        return jsonify({'error': 'date must be YYYY-MM-DD and radius must be from 0 to 7'}), 400
+    start_date = center - datetime.timedelta(days=radius)
+    end_date = center + datetime.timedelta(days=radius)
+    daily, current = read_daily(
+        user_db,
+        cipher_for_user(user),
+        start_date.isoformat(),
+        end_date.isoformat(),
+        radius * 2 + 1,
+    )
+    if not current:
+        return jsonify({'error': 'analytics not ready'}), 404
+    by_date = {item['date']: item.get('dayView') for item in daily if item.get('dayView')}
+    days = []
+    cursor = start_date
+    while cursor <= end_date:
+        date = cursor.isoformat()
+        item = by_date.get(date) or empty_day(date, context)
+        days.append(item)
+        cursor += datetime.timedelta(days=1)
+    focus = days[radius]
+    focus['availabilityNotes'] = availability_notes(focus)
+    nearby = [{
+        'date': item['date'],
+        'dayState': item['dayState'],
+        'sleepDuration': item['headlineScores']['sleepDuration'],
+        'sleepNeed': item['headlineScores']['sleepNeed'],
+        'recovery': item['headlineScores']['recovery'],
+        'strain': item['headlineScores']['strain'],
+    } for item in days]
+    response = jsonify({
+        'contractVersion': focus['contractVersion'],
+        'day': focus,
+        'nearbyDays': nearby,
+        'runId': current['runId'],
+    })
+    response.set_etag(current['runId'])
+    response.headers['Cache-Control'] = 'private, no-cache'
     return response
 
 @v2.route("/push/<method>", methods=['PUT'])

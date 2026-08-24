@@ -170,6 +170,7 @@ class HealthspanAndPipelineTests(unittest.TestCase):
             "algorithmVersion", "sourceFingerprint", "configurationFingerprint", "processedAt", "sleepEvents",
             "dailySleep", "sleepDebt", "sleepConsistency", "healthspan", "deviceSleep", "steps",
             "activeCalories", "totalCalories", "restingHeartRate", "weight"
+            , "strain", "dayViews"
         })
 
 
