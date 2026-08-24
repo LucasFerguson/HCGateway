@@ -45,6 +45,11 @@ reference, but only `/root/HCGateway` was modified.
 - `GET /api/v2/sync/status` exposes a server-observed upload heartbeat. Its
   120-second active window indicates recent authenticated ingestion, not the
   durable state of the Android background task.
+- Android sync now pre-filters impossible timestamps and recursively splits a
+  server-rejected batch to isolate a bad record instead of losing the batch.
+- The app keeps an advisory per-record-type synced-day map, supports forced
+  re-upload/reset, and can display the authenticated server inventory. The map
+  is an optimization, not server truth; reinstalling or clearing app data loses it.
 - `calculate-database-folder-disk-usage-in-gigabytes.sh` reports decimal GB,
   binary GiB, and exact bytes for the bind-mounted database directory.
 
@@ -174,10 +179,18 @@ repeat the lifecycle and test-suite checks.
 
 ## Git checkpoint
 
-The implementation is split into these local commits and was not pushed during
-the session:
+The analytics work was committed locally, then the other-device Android sync
+commit was fetched from `origin/main` and merged without conflicts. At this
+checkpoint local `main` is ahead of `origin/main` by the analytics commits plus
+the merge commit; it has not yet been pushed.
 
 ```text
+b622a02 Merge remote-tracking branch 'origin/main'
+a97e4bb docs: record analytics v8.1 production checkpoint
+e0d02b8 feat: add provisional recovery and strain v2.1
+5136e8e feat(android): keep sync moving around bad records
+184afeb feat(android): harden Health Connect sync
+7091727 docs: add repository agent guidance
 8f3f8f6 feat: expose phone sync activity status
 9a636b1 chore: add database disk usage report
 485a867 feat: add frontend day analytics and strain estimates
@@ -199,20 +212,26 @@ are ignored. Never commit or print their secret values.
 ## Recommended next session
 
 1. Read this file and `doc/frontend-data-model.md`, then run `git status`,
-   `docker compose ps`, and the 30-test command above.
+   `docker compose ps`, and the 34-test command above.
 2. Set the primary user's real `homeTimeZone`, desired sleep target, and
    optional birth date through `PUT /api/v2/analytics/config`; do not guess
    personal configuration.
-3. Finish the in-progress frontend migration in
+3. Validate the merged Android sync behavior on a physical Android 14+ device:
+   historical permission, paginated reads, malformed-record isolation, local
+   day skipping, forced re-upload/reset, background execution, and inventory UI.
+4. Replace full-history analytics after every upload with incremental processing
+   of affected dates plus the bounded prior windows needed by Recovery, sleep
+   debt, consistency, and healthspan. Preserve immutable run/pointer safety.
+5. Add Health Connect `heartRateVariabilityRmssd` to the Android permission/read
+   list and verify its actual payload shape. Until HRV arrives, Recovery must
+   remain visibly `partial`; do not promote the current heuristic to validated.
+6. Finish the in-progress frontend migration in
    `/root/health-connect-dashboard-for-fitbit`: use `/api/v2/analytics/day` for
    the day screen, treat the backend timezone and sleep end-date assignment as
    authoritative, render metric statuses/notes, and use `/api/v2/sync/status`
    for the ingestion indicator. That repository was intentionally read-only in
    the backend task, so get explicit authorization before changing it.
-4. Add historical Health Connect ingestion from the mobile app so the `lucas`
-   account receives the full device history; the worker will rebuild
-   automatically after each sync.
-5. Once the frontend works end-to-end, consider exposing paginated prepared
+7. Once the frontend works end-to-end, consider exposing paginated prepared
    sleep events/device comparisons and expanding the Python port to additional
    raw signals. Keep raw records as the immutable source of truth.
 

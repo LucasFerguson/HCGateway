@@ -54,11 +54,10 @@ For the current implementation checkpoint and recommended next work, start with
   `app.json` permissions for prebuild durability.
 
   ⚠️ **Caveats to verify on-device (Android 14+):**
-  - The JS lib `react-native-health-connect@3.2.1` bundles
-    `androidx.health.connect:connect-client:1.1.0-alpha06`, which predates
-    formal history-permission support (added ~alpha07). We request the raw
-    permission string directly to work around this. Confirm the OS actually
-    shows the "access past data" prompt and that reads past 30 days return data.
+  - The lockfile currently installs `react-native-health-connect@3.4.0`. The app
+    still requests the raw history-permission string directly. Confirm on a
+    physical device that the OS shows the "access past data" prompt and that
+    reads past 30 days actually return data; this has not been proven on-device.
   - If it does not work, options: bump `react-native-health-connect` (and the
     bundled connect-client), or verify the permission appears in Health
     Connect's app settings. Document findings here.
