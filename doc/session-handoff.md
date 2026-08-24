@@ -29,6 +29,17 @@ reference, but only `/root/HCGateway` was modified.
   separate `api`, `analytics-worker`, and `db` services.
 - Raw syncs now preserve available Health Connect provenance, including device,
   data origin, recording method, and client-record identity/version.
+- `GET /api/v2/analytics/day?date=YYYY-MM-DD&radius=7` now provides the focused
+  day contract (`health-day-v1`), including hourly heart-rate summaries, sleep
+  stages, hourly steps, workouts, nearby days, and explicit availability notes.
+- Experimental cardiovascular strain is implemented separately from the
+  proprietary WHOOP algorithm. It requires credible personal zone calibration
+  and adequate heart-rate coverage before publishing a score.
+- `GET /api/v2/sync/status` exposes a server-observed upload heartbeat. Its
+  120-second active window indicates recent authenticated ingestion, not the
+  durable state of the Android background task.
+- `calculate-database-folder-disk-usage-in-gigabytes.sh` reports decimal GB,
+  binary GiB, and exact bytes for the bind-mounted database directory.
 
 The primary frontend bootstrap contract is:
 
@@ -59,8 +70,9 @@ matching the reference dashboard's expected snapshot shape.
 
 ## Current data and runtime state
 
-At handoff, all Compose services are running and healthy. The analytics worker
-backfilled all four accounts:
+At the initial analytics handoff, all Compose services were running and healthy
+and the worker had backfilled all four accounts. These counts are a historical
+snapshot and may change as the phone syncs or deletes records:
 
 | Username | Raw entries | Notable prepared output |
 | --- | ---: | --- |
@@ -81,9 +93,10 @@ uses it.
 
 ## Verification already performed
 
-The final image passes 16 tests covering pipeline behavior, fingerprints,
-MongoDB idempotency, job revision/lease safety, bearer authentication, user
-isolation, endpoint shape, configuration validation, and daily date ranges:
+The current image passes 30 tests covering pipeline and strain behavior,
+fingerprints, MongoDB idempotency, job revision/lease safety, bearer
+authentication, user isolation, endpoint shape, day shaping, sync activity,
+configuration validation, and daily date ranges:
 
 ```bash
 docker exec hcgateway_api sh -lc \
@@ -131,6 +144,9 @@ The implementation is split into these local commits and was not pushed during
 the session:
 
 ```text
+8f3f8f6 feat: expose phone sync activity status
+9a636b1 chore: add database disk usage report
+485a867 feat: add frontend day analytics and strain estimates
 90d6d89 fix: stabilize MongoDB on the current host kernel
 39912c0 docs: document analytics contracts and operations
 9c5d969 feat: expose authenticated frontend analytics APIs
@@ -139,20 +155,26 @@ the session:
 da6f8ff chore: keep local health data and secrets out of git
 ```
 
+The OpenAPI file at `doc/api-documentation.yml` is currently maintained by
+hand; no schema-generation step was found. Keep it synchronized with route and
+contract changes.
+
 Local `.env`, `api/.env`, Firebase credentials, Mongo files, and Python caches
 are ignored. Never commit or print their secret values.
 
 ## Recommended next session
 
 1. Read this file and `doc/frontend-data-model.md`, then run `git status`,
-   `docker compose ps`, and the 16-test command above.
+   `docker compose ps`, and the 30-test command above.
 2. Set the primary user's real `homeTimeZone`, desired sleep target, and
    optional birth date through `PUT /api/v2/analytics/config`; do not guess
    personal configuration.
-3. Wire `/root/health-connect-dashboard-for-fitbit` to authenticate against
-   HCGateway and consume `/api/v2/analytics/snapshot`. That repository was
-   intentionally read-only in the completed task, so get explicit authorization
-   before changing it.
+3. Finish the in-progress frontend migration in
+   `/root/health-connect-dashboard-for-fitbit`: use `/api/v2/analytics/day` for
+   the day screen, treat the backend timezone and sleep end-date assignment as
+   authoritative, render metric statuses/notes, and use `/api/v2/sync/status`
+   for the ingestion indicator. That repository was intentionally read-only in
+   the backend task, so get explicit authorization before changing it.
 4. Add historical Health Connect ingestion from the mobile app so the `lucas`
    account receives the full device history; the worker will rebuild
    automatically after each sync.
