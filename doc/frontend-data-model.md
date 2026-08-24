@@ -110,8 +110,12 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
 
 ### Supporting endpoints
 
+- `GET /api/v2/sync/status` reports whether the server has observed an
+  authenticated phone upload within the last 120 seconds, along with the last
+  record type/count and lifetime upload counters. This is an ingestion
+  heartbeat, not proof that Android's foreground task is still running.
 - `GET /api/v2/analytics/status` returns the queue state and current run
-  metadata/counts.
+  metadata/counts, plus the same `phoneSync` object.
 - `POST /api/v2/analytics/rebuild` queues a rebuild and returns `202`; it never
   blocks a web worker.
 - `GET /api/v2/analytics/config` returns the effective home timezone, sleep

@@ -22,6 +22,7 @@ from analytics_engine.day_dashboard import empty_day
 from analytics_engine.jobs import enqueue_job
 from analytics_engine.service import inventory_for_user
 from analytics_engine.store import current_metadata, read_daily, read_snapshot
+from analytics_engine.sync_status import COLLECTION as SYNC_STATUS_COLLECTION, record_upload, status_response
 
 v2 = Blueprint('v2', __name__, url_prefix='/api/v2/')
 
@@ -215,6 +216,7 @@ def sync(method):
                                                  {'data': encrypted, "app": metadata['dataOrigin'], "provenance": provenance, "start": starttime, "end": endtime}
                                                 })
 
+    record_upload(mongo['hcgateway'], userid, method, len(data))
     enqueue_job(mongo['hcgateway'], userid, reason='sync')
     return jsonify({'success': True}), 200
 
@@ -298,7 +300,17 @@ def analyticsStatus():
     return jsonify({
         'job': job_response(mongo['hcgateway']['analytics_jobs'].find_one({'_id': g.user})),
         'current': current_metadata(user_db),
+        'phoneSync': status_response(mongo['hcgateway'][SYNC_STATUS_COLLECTION].find_one({'_id': str(g.user)})),
     }), 200
+
+
+@v2.get("/sync/status")
+def syncStatus():
+    user, _ = current_user_and_db()
+    if not user:
+        return jsonify({'error': 'invalid user id'}), 400
+    document = mongo['hcgateway'][SYNC_STATUS_COLLECTION].find_one({'_id': str(g.user)})
+    return jsonify(status_response(document)), 200
 
 
 @v2.route("/analytics/config", methods=['GET', 'PUT'])

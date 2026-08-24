@@ -187,6 +187,36 @@ paths:
                   sleepSessions: {type: array, items: {type: object}}
                   analytics: {type: object}
         '404': {description: The first background analytics run is not ready.}
+  "/api/v2/sync/status":
+    get:
+      tags: [Sync]
+      operationId: getPhoneSyncStatus
+      description: >-
+        Return server-observed phone upload activity. observedActive is true for
+        120 seconds after the latest authenticated sync upload; it does not claim
+        that the Android foreground task itself is still running.
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Phone upload activity and lifetime counters.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [observedActive, state, activityWindowSeconds]
+                properties:
+                  observedActive: {type: boolean}
+                  state: {type: string, enum: [receiving, idle, never_observed]}
+                  lastUploadAt: {type: string, format: date-time, nullable: true}
+                  activeUntil: {type: string, format: date-time, nullable: true}
+                  secondsSinceLastUpload: {type: integer, nullable: true}
+                  lastRecordType: {type: string, nullable: true}
+                  lastRecordCount: {type: integer, nullable: true}
+                  totalUploadRequests: {type: integer}
+                  totalRecordsReceived: {type: integer}
+                  activityWindowSeconds: {type: integer, example: 120}
+                  note: {type: string}
   "/api/v2/analytics/daily":
     get:
       tags: [Analytics]
@@ -239,7 +269,7 @@ paths:
     get:
       tags: [Analytics]
       operationId: getAnalyticsStatus
-      description: Return background job status and current-run metadata.
+      description: Return analytics job/current-run metadata and the same server-observed phoneSync status.
       security:
       - bearerAuth: []
       responses:

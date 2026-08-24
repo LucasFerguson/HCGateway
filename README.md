@@ -117,6 +117,9 @@ The platform consists of four parts:
 Support for more types is planned for the future.
 
 - Each sync takes approximatly 15 minutes
+- `GET /api/v2/sync/status` exposes server-observed upload activity. It reports
+  active for 120 seconds after the latest authenticated phone upload and is
+  also included as `phoneSync` in `GET /api/v2/analytics/status`.
 - The server encrypts the data using Fernet encryption, then stores it in a mongo database.
 - The server exposes an API to let developers login and get the data for their users.
 

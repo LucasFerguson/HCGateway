@@ -69,6 +69,7 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
         control = self.mongo["hcgateway"]
         control["users"].delete_many({"_id": {"$in": [self.user_id, self.other_user_id]}})
         control["analytics_jobs"].delete_many({"_id": {"$in": [self.user_id, self.other_user_id]}})
+        control["sync_status"].delete_many({"_id": {"$in": [self.user_id, self.other_user_id]}})
         for user_id in (self.user_id, self.other_user_id):
             self.mongo.drop_database("hcgateway_" + user_id)
         self.mongo.close()
@@ -126,6 +127,30 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
             note["field"] == "headlineScores.recovery"
             for note in payload["day"]["availabilityNotes"]
         ))
+
+    def test_phone_sync_status_tracks_recent_upload_activity(self):
+        upload = self.client.post(
+            "/api/v2/sync/Steps",
+            headers=self.auth(),
+            json={"data": {
+                "metadata": {"id": "phone-steps", "dataOrigin": "test.phone"},
+                "startTime": "2026-01-02T12:00:00Z",
+                "endTime": "2026-01-02T13:00:00Z",
+                "count": 500,
+            }},
+        )
+        self.assertEqual(upload.status_code, 200)
+
+        response = self.client.get("/api/v2/sync/status", headers=self.auth())
+        status = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(status["observedActive"])
+        self.assertEqual(status["state"], "receiving")
+        self.assertEqual(status["lastRecordType"], "steps")
+        self.assertEqual(status["lastRecordCount"], 1)
+
+        analytics_status = self.client.get("/api/v2/analytics/status", headers=self.auth()).get_json()
+        self.assertTrue(analytics_status["phoneSync"]["observedActive"])
 
     def test_config_validation_and_rebuild_queue(self):
         invalid = self.client.put(
