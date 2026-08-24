@@ -199,6 +199,9 @@ The mobile application is a React Native Android app that syncs Health Connect
 records to the server every 2 hours by default. It starts a foreground service
 for recurring sync work.
 
+See the Android client's [README and prioritized TODO list](app/README.md) for
+current completeness, reliability, privacy, testing, and release work.
+
 The sync path is intentionally defensive:
 
 - Health Connect reads are paginated.
