@@ -12,13 +12,19 @@ from collections import defaultdict
 from zoneinfo import ZoneInfo
 
 
-ALGORITHM_VERSION = "experimental-cardio-strain-v1"
+ALGORITHM_VERSION = "experimental-cardio-strain-v2.1"
 METHODOLOGY = (
-    "Non-proprietary estimate. Consecutive heart-rate samples are integrated when "
+    "Provisional, non-proprietary estimate. Consecutive heart-rate samples are integrated when "
     "they are no more than 5 minutes apart. Effort is linearly interpolated across "
     "personalized heart-rate-zone boundaries, producing 0-1 load-minutes. Total "
     "load is mapped to 0-21 as 21*log(1+load)/log(1+600), capped at 21."
 )
+LIMITATIONS = [
+    "Empirical heart-rate zones are inferred from observed data and are not a measured maximum or lactate-threshold test.",
+    "Heart-rate load does not capture muscular, mechanical, or skill-related strain.",
+    "The score mapping and empirical calibration have not been validated against personal outcomes.",
+    "TODO: validate calibration against a measured maximum and tune load mapping from longitudinal outcomes.",
+]
 MAX_SAMPLE_GAP_SECONDS = 300
 DAY_MIN_SPAN_SECONDS = 6 * 60 * 60
 DAY_MIN_COVERAGE_RATIO = 0.70
@@ -97,9 +103,9 @@ def calibrate_zone_thresholds(historical_samples, resting_hr):
     if len(dates) < 14:
         reasons.append("at_least_14_historical_dates_required")
     empirical_high = _percentile([bpm for _, bpm in normalized], 0.995) if normalized else None
-    if empirical_high is not None and resting_hr is not None and empirical_high - float(resting_hr) < 60:
+    if empirical_high is not None and resting_hr is not None and empirical_high - float(resting_hr) < 45:
         reasons.append("observed_heart_rate_range_too_narrow")
-    if empirical_high is not None and empirical_high < 140:
+    if empirical_high is not None and empirical_high < 120:
         reasons.append("empirical_high_too_low_for_reliable_maximum")
     if reasons:
         return {
@@ -125,6 +131,8 @@ def calibrate_zone_thresholds(historical_samples, resting_hr):
         "invalidSampleCount": invalid,
         "empiricalHighBpm": round(empirical_high, 1),
         "thresholds": [round(value, 1) for value in thresholds],
+        "confidence": "low" if empirical_high < 140 else "moderate",
+        "provisional": True,
     }
 
 
@@ -168,7 +176,7 @@ def _score(load_minutes):
 
 
 def _split_at_local_midnight(start, end, time_zone):
-    zone = ZoneInfo(time_zone)
+    zone = time_zone if isinstance(time_zone, ZoneInfo) else ZoneInfo(time_zone)
     cursor = start
     while cursor < end:
         local = cursor.astimezone(zone)
@@ -182,13 +190,19 @@ def _split_at_local_midnight(start, end, time_zone):
 def _segments(samples, thresholds, time_zone):
     by_day = defaultdict(list)
     all_segments = []
+    zone = ZoneInfo(time_zone)
     for (start, start_bpm), (end, end_bpm) in zip(samples, samples[1:]):
         elapsed = (end - start).total_seconds()
         if elapsed <= 0:
             continue
         accepted = elapsed <= MAX_SAMPLE_GAP_SECONDS
+        # A long gap inside one local day belongs in that day's coverage
+        # denominator. A gap crossing local dates does not create synthetic
+        # strain rows for completely unobserved days.
+        if not accepted and start.astimezone(zone).date() != end.astimezone(zone).date():
+            continue
         average_bpm = (start_bpm + end_bpm) / 2
-        for date, piece_start, piece_end in _split_at_local_midnight(start, end, time_zone):
+        for date, piece_start, piece_end in _split_at_local_midnight(start, end, zone):
             segment = {
                 "date": date,
                 "start": piece_start,
@@ -286,6 +300,8 @@ def calculate_strain(samples, time_zone="UTC", zone_thresholds=None, resting_hr=
         "algorithmVersion": ALGORITHM_VERSION,
         "status": "available" if thresholds else "unavailable",
         "methodology": METHODOLOGY,
+        "limitations": LIMITATIONS,
+        "provisional": True,
         "timeZone": time_zone,
         "calibration": calibration,
         "daily": [],

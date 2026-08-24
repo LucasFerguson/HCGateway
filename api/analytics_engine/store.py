@@ -43,8 +43,10 @@ def _daily_documents(analytics):
         "activeCalories": analytics["activeCalories"]["daily"],
         "totalCalories": analytics["totalCalories"]["daily"],
         "restingHeartRate": analytics["restingHeartRate"]["daily"],
+        "heartRateVariability": analytics["heartRateVariability"]["daily"],
         "weight": analytics["weight"]["daily"],
         "strain": analytics["strain"]["daily"],
+        "recovery": analytics["recovery"]["daily"],
         "dayView": analytics["dayViews"],
     }
     dates = sorted({item["date"] for values in names.values() for item in values})
@@ -80,6 +82,7 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
             key: value for key, value in analytics.items() if key != "dayViews"
         }
         snapshot_analytics["strain"] = _without(_without(analytics["strain"], "daily"), "workouts")
+        snapshot_analytics["recovery"] = _without(analytics["recovery"], "daily")
         snapshot = {
             "generatedAt": analytics["processedAt"],
             "source": "health-connect",
@@ -115,9 +118,10 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
             "healthspan": _without(analytics["healthspan"], "trend"),
             "metricOverviews": {
                 name: {key: value for key, value in analytics[name].items() if key != "daily"}
-                for name in ("steps", "activeCalories", "totalCalories", "restingHeartRate", "weight")
+                for name in ("steps", "activeCalories", "totalCalories", "restingHeartRate", "heartRateVariability", "weight")
             },
             "strain": _without(_without(analytics["strain"], "daily"), "workouts"),
+            "recovery": _without(analytics["recovery"], "daily"),
         }
         for kind, payload in summaries.items():
             database[SUMMARIES].update_one(
@@ -136,8 +140,10 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
             "dailyActiveCalories": len(analytics["activeCalories"]["daily"]),
             "dailyTotalCalories": len(analytics["totalCalories"]["daily"]),
             "dailyRestingHeartRate": len(analytics["restingHeartRate"]["daily"]),
+            "dailyHeartRateVariability": len(analytics["heartRateVariability"]["daily"]),
             "weightMeasurements": len(analytics["weight"]["daily"]),
             "dailyStrain": len(analytics["strain"]["daily"]),
+            "dailyRecovery": len(analytics["recovery"]["daily"]),
             "dayViews": len(analytics["dayViews"]),
         }
         database[RUNS].update_one(

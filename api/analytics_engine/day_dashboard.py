@@ -131,7 +131,7 @@ def _daily_point(records, date, zone, value_key, unit, label):
 
 def _observed_dates(raw, analytics, zone):
     dates = {item["date"] for item in analytics.get("dailySleep", [])}
-    for key in ("steps", "activeCalories", "totalCalories", "restingHeartRate", "weight"):
+    for key in ("steps", "activeCalories", "totalCalories", "restingHeartRate", "heartRateVariability", "weight"):
         dates.update(item["date"] for item in analytics.get(key, {}).get("daily", []))
     for record in raw.get("heartRates", []):
         dates.update(_date(sample["observedAt"], zone) for sample in record.get("samples", []))
@@ -155,12 +155,12 @@ def empty_day(date, context, processed_at=None):
         "headlineScores": {
             "sleepDuration": _metric("missing", unit="minutes", note="No sleep ending on this date was recorded."),
             "sleepNeed": _metric("missing", unit="percent", note="No sleep record is available to compare with the configured target."),
-            "recovery": _metric("not_implemented", unit="score_0_100", note="Recovery requires HRV and a validated personal-baseline model; HRV is not ingested."),
+            "recovery": _metric("insufficient_data", unit="score_0_100", note="The provisional Recovery model needs sleep plus a calibrated RHR or HRV baseline."),
             "strain": _metric("missing", unit="score_0_21", note="No usable heart-rate strain result is available for this day."),
             "strainTarget": _metric("blocked", unit="score_0_21", note="A strain target depends on a trustworthy Recovery score."),
         },
         "supportingMetrics": {
-            "hrv": _metric("missing", unit="ms", note="HRV is not currently ingested from Health Connect."),
+            "hrv": _metric("missing", unit="ms", note="No heart-rate-variability RMSSD measurement was recorded for this day."),
             "restingHeartRate": _metric("missing", unit="bpm", note="No resting-heart-rate measurement was recorded for this day."),
             "respiratoryRate": _metric("missing", unit="breaths_per_minute", note="No respiratory-rate measurement was recorded for this day."),
             "skinTemperatureDeviation": _metric("missing", unit="celsius_delta", note="Skin temperature is not currently present in the database."),
@@ -213,7 +213,9 @@ def build_day_views(raw, analytics, context):
     steps = _lookup(analytics.get("steps", {}).get("daily", []))
     calories = _lookup(analytics.get("totalCalories", {}).get("daily", []))
     resting = _lookup(analytics.get("restingHeartRate", {}).get("daily", []))
+    hrv = _lookup(analytics.get("heartRateVariability", {}).get("daily", []))
     strain = _lookup(analytics.get("strain", {}).get("daily", []))
+    recovery = _lookup(analytics.get("recovery", {}).get("daily", []))
     workout_strain = {item.get("id"): item for item in analytics.get("strain", {}).get("workouts", [])}
     views = []
     for date in _observed_dates(raw, analytics, zone):
@@ -253,6 +255,12 @@ def build_day_views(raw, analytics, context):
         resting_day = resting.get(date)
         if resting_day:
             view["supportingMetrics"]["restingHeartRate"] = _metric("available", resting_day["value"], "bpm", source=resting_day["source"], quality_flags=resting_day.get("qualityFlags"))
+        hrv_day = hrv.get(date)
+        if hrv_day:
+            view["supportingMetrics"]["hrv"] = _metric(
+                "available", hrv_day["value"], "ms", source=hrv_day["source"],
+                quality_flags=hrv_day.get("qualityFlags"), metric="RMSSD",
+            )
         view["supportingMetrics"]["respiratoryRate"] = _daily_point(raw.get("respiratoryRates", []), date, zone, "breathsPerMinute", "breaths_per_minute", "respiratory-rate")
         view["supportingMetrics"]["oxygenSaturation"] = _daily_point(raw.get("oxygenSaturations", []), date, zone, "percentage", "percent", "oxygen-saturation")
         workouts = []
@@ -290,6 +298,17 @@ def build_day_views(raw, analytics, context):
                     "available", calibration.get("thresholds"), "bpm", note=zone_note,
                     source=calibration.get("method"), testDate=calibration.get("testDate"),
                 )
+        recovery_day = recovery.get(date)
+        if recovery_day:
+            view["headlineScores"]["recovery"] = _metric(
+                recovery_day.get("status", "insufficient_data"), recovery_day.get("score"), "score_0_100",
+                note="Provisional, non-clinical readiness estimate; incomplete inputs are reweighted. This is not a proprietary wearable Recovery score.",
+                source="health-connect-multi-signal",
+                quality_flags=recovery_day.get("quality", {}).get("reasons"),
+                modelVersion=analytics.get("recovery", {}).get("algorithmVersion"),
+                provisional=True, band=recovery_day.get("band"),
+                components=recovery_day.get("components", {}), quality=recovery_day.get("quality", {}),
+            )
         latest = latest_observed_by_date.get(date)
         if latest:
             view["timeline"]["now"] = {

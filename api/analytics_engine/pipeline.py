@@ -1,4 +1,4 @@
-"""Health analytics v7: the v6 parity port plus frontend day-view signals."""
+"""Health analytics v8.1: v7 plus provisional Recovery and Strain v2.1."""
 
 import datetime as dt
 import hashlib
@@ -10,10 +10,11 @@ from zoneinfo import ZoneInfo
 
 from .context import AnalyticsContext, validate_context
 from .day_dashboard import build_day_views
+from .recovery import calculate_recovery
 from .strain import calculate_strain
 
 
-ALGORITHM_VERSION = "health-analytics-v7"
+ALGORITHM_VERSION = "health-analytics-v8.1"
 HEALTHSPAN_MODEL_VERSION = "experimental-healthspan-v1"
 SAME_SLEEP_EVENT_OVERLAP_RATIO = 0.8
 DAY_SECONDS = 86_400
@@ -576,6 +577,9 @@ def process_health_data(raw, context=AnalyticsContext()):
     total_calories = aggregate_interval_metric(raw.get("totalCalories", []), "kcal", "energyKcal", context)
     resting_heart_rate = aggregate_point_metric(raw.get("restingHeartRates", []), "bpm", "bpm", "median", context)
     weight = aggregate_point_metric(raw.get("weights", []), "kg", "kilograms", "latest", context)
+    heart_rate_variability = aggregate_point_metric(
+        raw.get("heartRateVariabilities", []), "ms", "milliseconds", "median", context
+    )
     heart_rate_records = raw.get("heartRates", [])
     samples_by_source = defaultdict(list)
     for record in heart_rate_records:
@@ -595,6 +599,13 @@ def process_health_data(raw, context=AnalyticsContext()):
     strain["source"] = heart_rate_source
     if context.heartRateZoneTestDate and strain.get("calibration"):
         strain["calibration"]["testDate"] = context.heartRateZoneTestDate
+    recovery = calculate_recovery(
+        daily_sleep,
+        resting_heart_rate["daily"],
+        consistency["daily"],
+        context.sleepTargetMinutes,
+        heart_rate_variability["daily"],
+    )
     analytics = {
         "algorithmVersion": ALGORITHM_VERSION,
         "sourceFingerprint": source_fingerprint(raw),
@@ -611,7 +622,9 @@ def process_health_data(raw, context=AnalyticsContext()):
         "totalCalories": total_calories,
         "restingHeartRate": resting_heart_rate,
         "weight": weight,
+        "heartRateVariability": heart_rate_variability,
         "strain": strain,
+        "recovery": recovery,
     }
     analytics["dayViews"] = build_day_views(raw, analytics, context)
     return analytics

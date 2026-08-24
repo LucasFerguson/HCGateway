@@ -86,6 +86,7 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
         self.assertEqual(payload["analytics"]["steps"]["daily"][0]["value"], 1234)
         self.assertNotIn("dayViews", payload["analytics"])
         self.assertNotIn("daily", payload["analytics"]["strain"])
+        self.assertNotIn("daily", payload["analytics"]["recovery"])
         self.assertIn("ETag", response.headers)
 
         other = self.mongo["hcgateway"]["users"].find_one({"_id": self.other_user_id})
@@ -122,7 +123,7 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
         self.assertEqual(payload["contractVersion"], "health-day-v1")
         self.assertEqual(len(payload["nearbyDays"]), 3)
         self.assertEqual(payload["day"]["supportingMetrics"]["steps"]["value"], 1234)
-        self.assertEqual(payload["day"]["headlineScores"]["recovery"]["status"], "not_implemented")
+        self.assertEqual(payload["day"]["headlineScores"]["recovery"]["status"], "insufficient_data")
         self.assertTrue(any(
             note["field"] == "headlineScores.recovery"
             for note in payload["day"]["availabilityNotes"]

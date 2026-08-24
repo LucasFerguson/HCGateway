@@ -169,8 +169,8 @@ class HealthspanAndPipelineTests(unittest.TestCase):
         self.assertEqual(set(first), {
             "algorithmVersion", "sourceFingerprint", "configurationFingerprint", "processedAt", "sleepEvents",
             "dailySleep", "sleepDebt", "sleepConsistency", "healthspan", "deviceSleep", "steps",
-            "activeCalories", "totalCalories", "restingHeartRate", "weight"
-            , "strain", "dayViews"
+            "activeCalories", "totalCalories", "restingHeartRate", "heartRateVariability", "weight",
+            "strain", "recovery", "dayViews"
         })
 
 

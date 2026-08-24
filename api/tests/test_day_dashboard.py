@@ -46,7 +46,7 @@ class DayDashboardTests(unittest.TestCase):
         self.assertEqual(day["headlineScores"]["sleepDuration"]["stageMinutes"]["awake"], 10)
         self.assertEqual(day["timeline"]["heartRate"]["hours"][8]["mean"], 150)
         self.assertEqual(day["timeline"]["steps"][12]["count"], 1200)
-        self.assertEqual(day["headlineScores"]["recovery"]["status"], "not_implemented")
+        self.assertEqual(day["headlineScores"]["recovery"]["status"], "insufficient_data")
         self.assertEqual(day["headlineScores"]["strain"]["status"], "available")
         self.assertLessEqual(len(day["timeline"]["strain"]), 34)
 

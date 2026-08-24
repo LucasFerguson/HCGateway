@@ -41,6 +41,14 @@ class StrainTests(unittest.TestCase):
         result = calculate_strain(observations, time_zone="America/Chicago", zone_thresholds=THRESHOLDS)
         self.assertEqual([day["date"] for day in result["daily"]], ["2026-01-01", "2026-01-02"])
 
+    def test_multi_day_sampling_gap_does_not_create_empty_calendar_days(self):
+        observations = (
+            samples("2026-01-01T08:00:00Z", 60)
+            + samples("2026-01-04T08:00:00Z", 60)
+        )
+        result = calculate_strain(observations, zone_thresholds=THRESHOLDS)
+        self.assertEqual([day["date"] for day in result["daily"]], ["2026-01-01", "2026-01-04"])
+
     def test_workout_score_is_independent_and_quality_gated(self):
         observations = samples("2026-01-01T08:00:00Z", 8 * 60)
         workouts = [
@@ -82,7 +90,7 @@ class StrainTests(unittest.TestCase):
         self.assertFalse(result["availability"]["available"])
         self.assertIn("at_least_2000_historical_samples_required", result["availability"]["reasons"])
 
-    def test_fallback_rejects_a_low_empirical_high_as_a_personal_maximum(self):
+    def test_fallback_accepts_a_provisional_low_confidence_empirical_high(self):
         history = []
         start = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc)
         for day in range(14):
@@ -92,8 +100,9 @@ class StrainTests(unittest.TestCase):
                     "bpm": 55 + (index % 75),
                 })
         calibration = calibrate_zone_thresholds(history, 55)
-        self.assertFalse(calibration["available"])
-        self.assertIn("empirical_high_too_low_for_reliable_maximum", calibration["reasons"])
+        self.assertTrue(calibration["available"])
+        self.assertEqual(calibration["confidence"], "low")
+        self.assertTrue(calibration["provisional"])
 
 
 if __name__ == "__main__":

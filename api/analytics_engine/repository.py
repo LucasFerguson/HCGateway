@@ -78,6 +78,14 @@ def _weight(document, data):
     return {"id": record_id, "source": source, "observedAt": start, "kilograms": kilograms}
 
 
+def _heart_rate_variability(document, data):
+    record_id, source, start, _ = _envelope(document)
+    milliseconds = _number(
+        data.get("heartRateVariabilityMillis"), "heart rate variability RMSSD", strictly_positive=True
+    )
+    return {"id": record_id, "source": source, "observedAt": start, "milliseconds": milliseconds}
+
+
 def _heart_rate(document, data):
     record_id, source, start, end = _envelope(document, require_end=True)
     samples = []
@@ -125,6 +133,7 @@ MAPPERS = {
     "restingHeartRate": ("restingHeartRates", _resting_heart_rate),
     "weight": ("weights", _weight),
     "heartRate": ("heartRates", _heart_rate),
+    "heartRateVariabilityRmssd": ("heartRateVariabilities", _heart_rate_variability),
     "respiratoryRate": ("respiratoryRates", _respiratory_rate),
     "oxygenSaturation": ("oxygenSaturations", _oxygen_saturation),
     "exerciseSession": ("exerciseSessions", _exercise_session),
@@ -142,6 +151,7 @@ def empty_raw_health_data():
             "restingHeartRates",
             "weights",
             "heartRates",
+            "heartRateVariabilities",
             "respiratoryRates",
             "oxygenSaturations",
             "exerciseSessions",
