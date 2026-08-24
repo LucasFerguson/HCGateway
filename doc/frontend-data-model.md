@@ -155,5 +155,7 @@ docker compose run --rm analytics-worker python -m analytics_engine.worker --dra
 
 The current host runs Linux 7.0.2, which is in MongoDB's documented affected
 kernel range for SERVER-121912. Compose temporarily pins the previously running
-MongoDB 8.0.8 image by digest. Upgrade the host to kernel 7.0.14 or later, then
-move the pin to a supported current MongoDB patch release.
+MongoDB 8.0.8 image by digest and sets `GLIBC_TUNABLES=glibc.pthread.rseq=1` to
+avoid the affected TCMalloc path. This is a compatibility workaround: upgrade
+the host to kernel 7.0.14 or later, then remove the override and move the image
+pin to a supported current MongoDB patch release.

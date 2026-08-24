@@ -35,9 +35,9 @@ services:
         condition: service_healthy
 
   db:
-    # MongoDB builds with SERVER-121912's kernel guard cannot start on the
-    # host's 6.19+ kernel. This is the previously deployed, compatible 8.0.8
-    # image pinned by digest so a future tag update cannot break restarts.
+    # Current MongoDB builds refuse this host's affected 7.0.2 kernel. Pin the
+    # previously deployed image and re-enable glibc rseq to avoid the TCMalloc
+    # crash tracked by SERVER-121912. Upgrade the host kernel as soon as able.
     image: mongo:8.0.8@sha256:2c5f154f4e47ef5008c53ff0c9006b6f5c7d6b119c96015aba4136c50ef48b98
     restart: unless-stopped
     ports:
@@ -48,6 +48,7 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?Set MONGO_INITDB_ROOT_PASSWORD in the root .env file}
+      GLIBC_TUNABLES: glibc.pthread.rseq=1
     healthcheck:
       test: ["CMD-SHELL", "mongosh --quiet -u \"$$MONGO_INITDB_ROOT_USERNAME\" -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)'"]
       interval: 10s
