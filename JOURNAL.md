@@ -4,6 +4,44 @@ A running log of key points in this project's history, newest first.
 
 ---
 
+## 2026-08-24
+
+Today, the 24th of August, the project took a massive leap forward: the
+Android application sync path moved from "best effort while the app stays
+alive" toward a much more honest, visible, and resilient uploader for getting
+Health Connect data from the phone up onto the server.
+
+- Upgraded `react-native-health-connect` to `3.4.0` and added
+  `postinstall: patch-package`.
+- Added Health Connect background/history permission support and manifest
+  declarations.
+- Removed unnecessary Health Connect write permission requests/declarations.
+- Fixed full pagination for `readRecords()`.
+- Replaced per-record delayed `setTimeout` uploads with awaited chunked
+  uploads.
+- Added retry/backoff and one-time token refresh retry on `401`.
+- Added an in-process sync mutex so manual/background syncs cannot overlap.
+- Moved `lastSync` advancement until after confirmed server success.
+- Added `lastSuccessfulSyncAt`, `lastSyncAttemptAt`, `lastSyncError`,
+  per-type permission/read/upload statuses, pages read, upload request count,
+  and effective sync window in the app UI.
+- Made the main app view scrollable so the status panel and controls do not
+  clip.
+- Added an Expo Android 35 compatibility patch at
+  `app/patches/expo-modules-core+1.12.18.patch`.
+- Updated the Android build wrapper to check for SDK 35.
+- Verified the change with `node --check app/App.js`,
+  `npx patch-package`, `./gradlew :app:assembleDebug`, and
+  `./build-android-apk-on-linux.sh`.
+- Produced a release APK at
+  `app/android/app/build/outputs/apk/release/app-release.apk`.
+
+This does not yet add durable WorkManager scheduling, and release signing is
+still using the existing debug-keystore behavior, but the Android app now has
+a far stronger foundation for full-history and unattended sync.
+
+---
+
 ## 2026-08-22
 
 Created this journal file to start tracking the history of the project.

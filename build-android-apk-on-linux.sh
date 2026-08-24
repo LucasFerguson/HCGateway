@@ -84,17 +84,17 @@ fi
 if [ -n "$SDK_DIR" ]; then
   [ -d "$SDK_DIR/platform-tools" ] && ok "platform-tools present" \
     || { warn "platform-tools missing"; PROBLEMS+=("Run: sdkmanager --install \"platform-tools\""); }
-  if ls "$SDK_DIR"/platforms/android-34 >/dev/null 2>&1; then
-    ok "platforms;android-34 present"
+  if ls "$SDK_DIR"/platforms/android-35 >/dev/null 2>&1; then
+    ok "platforms;android-35 present"
   else
-    warn "platforms;android-34 missing"
-    PROBLEMS+=("Run: sdkmanager --install \"platforms;android-34\"")
+    warn "platforms;android-35 missing"
+    PROBLEMS+=("Run: sdkmanager --install \"platforms;android-35\"")
   fi
-  if ls "$SDK_DIR"/build-tools/34.* >/dev/null 2>&1; then
-    ok "build-tools;34.x present"
+  if ls "$SDK_DIR"/build-tools/35.* >/dev/null 2>&1; then
+    ok "build-tools;35.x present"
   else
-    warn "build-tools;34.x missing"
-    PROBLEMS+=("Run: sdkmanager --install \"build-tools;34.0.0\"")
+    warn "build-tools;35.x missing"
+    PROBLEMS+=("Run: sdkmanager --install \"build-tools;35.0.0\"")
   fi
 else
   fail "Android SDK not found (ANDROID_HOME unset and no valid sdk.dir in app/android/local.properties)"

@@ -1,13 +1,13 @@
-import { StyleSheet, Text, View, TextInput, Button, Switch, Modal, TouchableOpacity, PermissionsAndroid, Platform } from 'react-native';
+import { StyleSheet, Text, View, TextInput, Button, Switch, Modal, PermissionsAndroid, Platform, ScrollView } from 'react-native';
 import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import {
   initialize,
   requestPermission,
   readRecords,
-  readRecord,
   insertRecords,
-  deleteRecordsByUuids
+  deleteRecordsByUuids,
+  getGrantedPermissions,
 } from 'react-native-health-connect';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Toast from 'react-native-toast-message';
@@ -17,7 +17,7 @@ import { requestNotifications } from 'react-native-permissions';
 import * as Sentry from '@sentry/react-native';
 import messaging from '@react-native-firebase/messaging';
 import { Notifications } from 'react-native-notifications';
-import DateTimePicker, { DateType, useDefaultStyles } from 'react-native-ui-datepicker';
+import DateTimePicker, { useDefaultStyles } from 'react-native-ui-datepicker';
 
 const setObj = async (key, value) => { try { const jsonValue = JSON.stringify(value); await AsyncStorage.setItem(key, jsonValue) } catch (e) { console.log(e) } }
 const setPlain = async (key, value) => { try { await AsyncStorage.setItem(key, value) } catch (e) { console.log(e) } }
@@ -98,30 +98,65 @@ let login;
 // let apiBase = 'https://api.hcgateway.shuchir.dev'; // need to change this - Lucas 2025-04-01
 let apiBase = 'http://192.168.8.239:6644/'; // need to change this - Lucas 2025-04-01
 let lastSync = null;
+let lastSuccessfulSyncAt = null;
+let lastSyncAttemptAt = null;
+let lastSyncError = null;
 let taskDelay = 7200 * 1000; // 2 hours
 let fullSyncMode = true; // Default to full history sync (see historyDays)
 let historyDays = 30; // How many days back a full sync reaches. Health Connect
 // caps reads at 30 days unless the READ_HEALTH_DATA_HISTORY permission is
 // granted, after which older data can be read. See requestHistoryPermission().
+let syncInFlight = null;
+let foregroundTasksRegistered = false;
 
-// The raw Android permission string for reading health data older than 30 days.
-// The JS health-connect library (v3.2.1) can't express this permission, so it is
-// requested directly via PermissionsAndroid. Requires Android 14 (API 34)+.
+const RECORD_TYPES = ["ActiveCaloriesBurned", "BasalBodyTemperature", "BloodGlucose", "BloodPressure", "BasalMetabolicRate", "BodyFat", "BodyTemperature", "BoneMass", "CyclingPedalingCadence", "CervicalMucus", "ExerciseSession", "Distance", "ElevationGained", "FloorsClimbed", "HeartRate", "Height", "Hydration", "LeanBodyMass", "MenstruationFlow", "MenstruationPeriod", "Nutrition", "OvulationTest", "OxygenSaturation", "Power", "RespiratoryRate", "RestingHeartRate", "SleepSession", "Speed", "Steps", "StepsCadence", "TotalCaloriesBurned", "Vo2Max", "Weight", "WheelchairPushes"];
+const READ_PERMISSIONS = RECORD_TYPES.map(recordType => ({ accessType: 'read', recordType }));
+const PAGE_SIZE = 1000;
+const UPLOAD_BATCH_SIZE = 250;
+const INCREMENTAL_OVERLAP_MS = 10 * 60 * 1000;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 const HEALTH_HISTORY_PERMISSION = 'android.permission.health.READ_HEALTH_DATA_HISTORY';
+const HEALTH_BACKGROUND_PERMISSION = 'android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND';
+const HEALTH_HISTORY_RECORD_TYPE = 'ReadHealthDataHistory';
+const HEALTH_BACKGROUND_RECORD_TYPE = 'BackgroundAccessPermission';
+
+const requestRawAndroidPermission = async (permission, label) => {
+  try {
+    if (Platform.OS !== 'android') return false;
+    const already = await PermissionsAndroid.check(permission);
+    if (already) return true;
+    const result = await PermissionsAndroid.request(permission);
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  } catch (err) {
+    console.log(`${label} permission request failed`, err);
+    return false;
+  }
+};
+
+const requestSpecialHealthPermission = async (recordType, androidPermission, label) => {
+  try {
+    if (Platform.OS !== 'android') return false;
+    if (await PermissionsAndroid.check(androidPermission)) return true;
+    const granted = await requestPermission([{ accessType: 'read', recordType }]);
+    if ((granted || []).some(permission => permission.accessType === 'read' && permission.recordType === recordType)) {
+      return true;
+    }
+    return await PermissionsAndroid.check(androidPermission);
+  } catch (err) {
+    console.log(`${label} Health Connect permission request failed`, err);
+    return requestRawAndroidPermission(androidPermission, label);
+  }
+};
 
 // Request the READ_HEALTH_DATA_HISTORY runtime permission. Returns true if
 // granted (or already granted). No-op-returns-false on non-Android platforms.
 const requestHistoryPermission = async () => {
-  try {
-    if (Platform.OS !== 'android') return false;
-    const already = await PermissionsAndroid.check(HEALTH_HISTORY_PERMISSION);
-    if (already) return true;
-    const result = await PermissionsAndroid.request(HEALTH_HISTORY_PERMISSION);
-    return result === PermissionsAndroid.RESULTS.GRANTED;
-  } catch (err) {
-    console.log('history permission request failed', err);
-    return false;
-  }
+  return requestSpecialHealthPermission(HEALTH_HISTORY_RECORD_TYPE, HEALTH_HISTORY_PERMISSION, 'history');
+};
+
+const requestBackgroundPermission = async () => {
+  return requestSpecialHealthPermission(HEALTH_BACKGROUND_RECORD_TYPE, HEALTH_BACKGROUND_PERMISSION, 'background read');
 };
 
 // ---------------------------------------------------------------------------
@@ -135,6 +170,17 @@ let syncStatus = {
   running: false,
   startedAt: null,
   finishedAt: null,
+  phase: 'idle',
+  error: null,
+  failedTypes: [],
+  pagesRead: 0,
+  uploadRequests: 0,
+  windowStart: null,
+  windowEnd: null,
+  historyPermissionGranted: null,
+  backgroundPermissionGranted: null,
+  lastSuccessfulSyncAt,
+  lastAttemptAt: lastSyncAttemptAt,
   numRecords: 0,
   numRecordsSynced: 0,
   currentType: null,
@@ -146,6 +192,7 @@ const STATUS_BADGE = {
   syncing: { label: 'syncing', color: '#1e88e5' },
   done: { label: 'done', color: '#2e7d32' },
   failed: { label: 'failed', color: '#c62828' },
+  permission_missing: { label: 'no access', color: '#ef6c00' },
   skipped: { label: 'none', color: '#bdbdbd' },
 };
 const notifySyncStatus = () => { try { if (syncStatusListener) syncStatusListener(); } catch (e) { console.log(e) } };
@@ -192,6 +239,27 @@ get('lastSync')
     }
   })
 
+get('lastSuccessfulSyncAt')
+  .then(res => {
+    if (res) {
+      lastSuccessfulSyncAt = res;
+    }
+  })
+
+get('lastSyncAttemptAt')
+  .then(res => {
+    if (res) {
+      lastSyncAttemptAt = res;
+    }
+  })
+
+get('lastSyncError')
+  .then(res => {
+    if (res) {
+      lastSyncError = res;
+    }
+  })
+
 get('fullSyncMode')
   .then(res => {
     if (res !== null) {
@@ -209,84 +277,25 @@ get('historyDays')
 const askForPermissions = async () => {
   const isInitialized = await initialize();
 
-  const grantedPermissions = await requestPermission([
-    { accessType: 'read', recordType: 'ActiveCaloriesBurned' },
-    { accessType: 'read', recordType: 'BasalBodyTemperature' },
-    { accessType: 'read', recordType: 'BloodGlucose' },
-    { accessType: 'read', recordType: 'BloodPressure' },
-    { accessType: 'read', recordType: 'BasalMetabolicRate' },
-    { accessType: 'read', recordType: 'BodyFat' },
-    { accessType: 'read', recordType: 'BodyTemperature' },
-    { accessType: 'read', recordType: 'BoneMass' },
-    { accessType: 'read', recordType: 'CyclingPedalingCadence' },
-    { accessType: 'read', recordType: 'CervicalMucus' },
-    { accessType: 'read', recordType: 'ExerciseSession' },
-    { accessType: 'read', recordType: 'Distance' },
-    { accessType: 'read', recordType: 'ElevationGained' },
-    { accessType: 'read', recordType: 'FloorsClimbed' },
-    { accessType: 'read', recordType: 'HeartRate' },
-    { accessType: 'read', recordType: 'Height' },
-    { accessType: 'read', recordType: 'Hydration' },
-    { accessType: 'read', recordType: 'LeanBodyMass' },
-    { accessType: 'read', recordType: 'MenstruationFlow' },
-    { accessType: 'read', recordType: 'MenstruationPeriod' },
-    { accessType: 'read', recordType: 'Nutrition' },
-    { accessType: 'read', recordType: 'OvulationTest' },
-    { accessType: 'read', recordType: 'OxygenSaturation' },
-    { accessType: 'read', recordType: 'Power' },
-    { accessType: 'read', recordType: 'RespiratoryRate' },
-    { accessType: 'read', recordType: 'RestingHeartRate' },
-    { accessType: 'read', recordType: 'SleepSession' },
-    { accessType: 'read', recordType: 'Speed' },
-    { accessType: 'read', recordType: 'Steps' },
-    { accessType: 'read', recordType: 'StepsCadence' },
-    { accessType: 'read', recordType: 'TotalCaloriesBurned' },
-    { accessType: 'read', recordType: 'Vo2Max' },
-    { accessType: 'read', recordType: 'Weight' },
-    { accessType: 'read', recordType: 'WheelchairPushes' },
-    { accessType: 'write', recordType: 'ActiveCaloriesBurned' },
-    { accessType: 'write', recordType: 'BasalBodyTemperature' },
-    { accessType: 'write', recordType: 'BloodGlucose' },
-    { accessType: 'write', recordType: 'BloodPressure' },
-    { accessType: 'write', recordType: 'BasalMetabolicRate' },
-    { accessType: 'write', recordType: 'BodyFat' },
-    { accessType: 'write', recordType: 'BodyTemperature' },
-    { accessType: 'write', recordType: 'BoneMass' },
-    { accessType: 'write', recordType: 'CyclingPedalingCadence' },
-    { accessType: 'write', recordType: 'CervicalMucus' },
-    { accessType: 'write', recordType: 'ExerciseSession' },
-    { accessType: 'write', recordType: 'Distance' },
-    { accessType: 'write', recordType: 'ElevationGained' },
-    { accessType: 'write', recordType: 'FloorsClimbed' },
-    { accessType: 'write', recordType: 'HeartRate' },
-    { accessType: 'write', recordType: 'Height' },
-    { accessType: 'write', recordType: 'Hydration' },
-    { accessType: 'write', recordType: 'LeanBodyMass' },
-    { accessType: 'write', recordType: 'MenstruationFlow' },
-    { accessType: 'write', recordType: 'MenstruationPeriod' },
-    { accessType: 'write', recordType: 'Nutrition' },
-    { accessType: 'write', recordType: 'OvulationTest' },
-    { accessType: 'write', recordType: 'OxygenSaturation' },
-    { accessType: 'write', recordType: 'Power' },
-    { accessType: 'write', recordType: 'RespiratoryRate' },
-    { accessType: 'write', recordType: 'RestingHeartRate' },
-    { accessType: 'write', recordType: 'SleepSession' },
-    { accessType: 'write', recordType: 'Speed' },
-    { accessType: 'write', recordType: 'Steps' },
-    { accessType: 'write', recordType: 'StepsCadence' },
-    { accessType: 'write', recordType: 'TotalCaloriesBurned' },
-    { accessType: 'write', recordType: 'Vo2Max' },
-    { accessType: 'write', recordType: 'Weight' },
-    { accessType: 'write', recordType: 'WheelchairPushes' },
-  ]);
+  if (!isInitialized) {
+    Toast.show({
+      type: 'error',
+      text1: "Health Connect unavailable",
+      text2: "Install or enable Health Connect, then retry."
+    });
+    return;
+  }
+
+  const grantedPermissions = await requestPermission(READ_PERMISSIONS);
+  await requestBackgroundPermission();
 
   console.log(grantedPermissions);
 
-  if (grantedPermissions.length < 68) {
+  if (grantedPermissions.length < READ_PERMISSIONS.length) {
     Toast.show({
       type: 'error',
       text1: "Permissions not granted",
-      text2: "Please visit settings to grant all permissions."
+      text2: "Please visit Health Connect settings to grant read permissions."
     })
   }
 };
@@ -330,17 +339,164 @@ const refreshTokenFunc = async () => {
   }
 }
 
+const chunkArray = (items, size) => {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
+const formatSyncError = (err) => {
+  if (!err) return 'unknown error';
+  if (err.response) return `${err.response.status}: ${JSON.stringify(err.response.data)}`;
+  return String(err.message || err);
+};
+
+const updateForegroundProgress = (numRecordsSynced, numRecords) => {
+  try {
+    ReactNativeForegroundService.update({
+      id: 1244,
+      title: 'HCGateway Sync Progress',
+      message: `HCGateway is currently syncing... [${numRecordsSynced}/${numRecords}]`,
+      icon: 'ic_launcher',
+      setOnlyAlertOnce: true,
+      color: '#000000',
+      progress: {
+        max: Math.max(1, numRecords),
+        curr: numRecordsSynced,
+      }
+    })
+  }
+  catch { }
+};
+
+const resetForegroundMessage = () => {
+  try {
+    ReactNativeForegroundService.update({
+      id: 1244,
+      title: 'HCGateway Sync Progress',
+      message: `HCGateway is working in the background to sync your data.`,
+      icon: 'ic_launcher',
+      setOnlyAlertOnce: true,
+      color: '#000000',
+    })
+  }
+  catch { }
+};
+
+const getReadPermissionSet = async () => {
+  try {
+    const granted = await getGrantedPermissions();
+    return new Set((granted || [])
+      .filter(permission => permission.accessType === 'read')
+      .map(permission => permission.recordType));
+  } catch (err) {
+    console.log('failed to read granted permissions', err);
+    return null;
+  }
+};
+
+const readAllRecords = async (recordType, timeRangeFilter) => {
+  let pageToken;
+  const records = [];
+  do {
+    const response = await readRecords(recordType, {
+      timeRangeFilter,
+      pageSize: PAGE_SIZE,
+      ...(pageToken ? { pageToken } : {})
+    });
+    const pageRecords = response.records || [];
+    records.push(...pageRecords);
+    syncStatus.pagesRead += 1;
+    syncStatus.numRecords += pageRecords.length;
+    setTypeStatus(recordType, { count: records.length });
+    notifySyncStatus();
+    pageToken = response.pageToken;
+  } while (pageToken);
+  return records;
+};
+
+const postSyncBatch = async (recordType, batch) => {
+  let refreshedForThisBatch = false;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await axios.post(`${apiBase}/api/v2/sync/${recordType}`, {
+        data: batch
+      }, {
+        headers: {
+          "Authorization": `Bearer ${login}`
+        }
+      });
+      syncStatus.uploadRequests += 1;
+      notifySyncStatus();
+      return;
+    } catch (err) {
+      if (err.response && err.response.status === 401 && !refreshedForThisBatch) {
+        refreshedForThisBatch = true;
+        await refreshTokenFunc();
+        continue;
+      }
+      if (attempt === 3) throw err;
+      await sleep((500 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 250));
+    }
+  }
+};
+
+const uploadRecords = async (recordType, records) => {
+  if (records.length === 0) {
+    setTypeStatus(recordType, { state: 'skipped' });
+    return 0;
+  }
+
+  let uploaded = 0;
+  for (const batch of chunkArray(records, UPLOAD_BATCH_SIZE)) {
+    await postSyncBatch(recordType, batch);
+    uploaded += batch.length;
+    syncStatus.numRecordsSynced += batch.length;
+    setTypeStatus(recordType, { synced: uploaded, state: uploaded >= records.length ? 'done' : 'syncing' });
+    updateForegroundProgress(syncStatus.numRecordsSynced, syncStatus.numRecords);
+    notifySyncStatus();
+  }
+  return uploaded;
+};
+
 const sync = async (customStartTime, customEndTime) => {
+  if (syncInFlight) {
+    Toast.show({
+      type: 'info',
+      text1: 'Sync already running',
+      text2: 'The current run will keep uploading before another starts.',
+    });
+    return syncInFlight;
+  }
+  syncInFlight = runSync(customStartTime, customEndTime)
+    .finally(() => {
+      syncInFlight = null;
+    });
+  return syncInFlight;
+};
+
+const runSync = async (customStartTime, customEndTime) => {
   const isInitialized = await initialize();
+  if (!isInitialized) {
+    Toast.show({
+      type: 'error',
+      text1: 'Health Connect unavailable',
+      text2: 'Install or enable Health Connect, then retry.',
+    });
+    return;
+  }
   console.log("Syncing data...");
-  let numRecords = 0;
-  let numRecordsSynced = 0;
   Toast.show({
     type: 'info',
     text1: customStartTime ? "Syncing from custom time..." : "Syncing data...",
   })
 
-  const currentTime = new Date().toISOString();
+  const syncEndTime = customEndTime ? customEndTime : new Date().toISOString();
+  const attemptTime = new Date().toISOString();
+  lastSyncAttemptAt = attemptTime;
+  await setPlain('lastSyncAttemptAt', attemptTime);
 
   // Start of the full-history window: historyDays back from now.
   const historyStart = String(new Date(new Date().setDate(new Date().getDate() - historyDays)).toISOString());
@@ -352,16 +508,19 @@ const sync = async (customStartTime, customEndTime) => {
   const needsHistory =
     (customStartTime && daysAgo(customStartTime) > 30) ||
     (!customStartTime && fullSyncMode && historyDays > 30);
+  let historyPermissionGranted = null;
   if (needsHistory) {
     const granted = await requestHistoryPermission();
+    historyPermissionGranted = granted;
     if (!granted) {
       Toast.show({
         type: 'error',
         text1: 'History permission not granted',
-        text2: 'Data older than 30 days may not sync. Grant "access past data" in Health Connect.',
+        text2: 'This run will be limited to the most recent 30 days.',
       });
     }
   }
+  const backgroundPermissionGranted = await requestBackgroundPermission();
 
   let startTime;
   if (customStartTime) {
@@ -375,176 +534,118 @@ const sync = async (customStartTime, customEndTime) => {
       startTime = historyStart;
   }
 
-  if (!customStartTime) {
-    await setPlain('lastSync', currentTime);
-    lastSync = currentTime;
+  if (needsHistory && historyPermissionGranted === false) {
+    const thirtyDaysAgo = new Date(Date.now() - (30 * 24 * 60 * 60 * 1000)).toISOString();
+    if (new Date(startTime).getTime() < new Date(thirtyDaysAgo).getTime()) {
+      startTime = thirtyDaysAgo;
+    }
+  } else if (!customStartTime && !fullSyncMode && lastSync) {
+    startTime = new Date(Math.max(0, new Date(lastSync).getTime() - INCREMENTAL_OVERLAP_MS)).toISOString();
   }
-
-  let recordTypes = ["ActiveCaloriesBurned", "BasalBodyTemperature", "BloodGlucose", "BloodPressure", "BasalMetabolicRate", "BodyFat", "BodyTemperature", "BoneMass", "CyclingPedalingCadence", "CervicalMucus", "ExerciseSession", "Distance", "ElevationGained", "FloorsClimbed", "HeartRate", "Height", "Hydration", "LeanBodyMass", "MenstruationFlow", "MenstruationPeriod", "Nutrition", "OvulationTest", "OxygenSaturation", "Power", "RespiratoryRate", "RestingHeartRate", "SleepSession", "Speed", "Steps", "StepsCadence", "TotalCaloriesBurned", "Vo2Max", "Weight", "WheelchairPushes"];
 
   // Initialize the sync status store for this run.
   syncStatus = {
     running: true,
     startedAt: new Date().toISOString(),
     finishedAt: null,
+    phase: 'reading',
+    error: null,
+    failedTypes: [],
+    pagesRead: 0,
+    uploadRequests: 0,
+    windowStart: startTime,
+    windowEnd: syncEndTime,
+    historyPermissionGranted,
+    backgroundPermissionGranted,
+    lastSuccessfulSyncAt,
+    lastAttemptAt: attemptTime,
     numRecords: 0,
     numRecordsSynced: 0,
     currentType: null,
-    types: recordTypes.reduce((acc, t) => { acc[t] = { state: 'pending', count: 0, synced: 0, error: null }; return acc; }, {}),
+    types: RECORD_TYPES.reduce((acc, t) => { acc[t] = { state: 'pending', count: 0, synced: 0, error: null }; return acc; }, {}),
   };
   notifySyncStatus();
 
-  for (let i = 0; i < recordTypes.length; i++) {
-    let records;
-    syncStatus.currentType = recordTypes[i];
-    setTypeStatus(recordTypes[i], { state: 'syncing' });
-    try {
-      console.log(`Reading records for ${recordTypes[i]} from ${startTime} to ${new Date().toISOString()}`);
-      records = await readRecords(recordTypes[i],
-        {
-          timeRangeFilter: {
-            operator: "between",
-            startTime: startTime,
-            endTime: customEndTime ? customEndTime : String(new Date().toISOString())
-          }
-        }
-      );
+  const grantedReadTypes = await getReadPermissionSet();
+  let runSucceeded = true;
+  let firstError = null;
 
-      records = records.records;
+  for (let i = 0; i < RECORD_TYPES.length; i++) {
+    const recordType = RECORD_TYPES[i];
+    if (grantedReadTypes && !grantedReadTypes.has(recordType)) {
+      setTypeStatus(recordType, { state: 'permission_missing', error: 'read permission not granted' });
+      continue;
+    }
+
+    let records;
+    syncStatus.currentType = recordType;
+    syncStatus.phase = 'reading';
+    setTypeStatus(recordType, { state: 'syncing' });
+    try {
+      console.log(`Reading records for ${recordType} from ${startTime} to ${syncEndTime}`);
+      records = await readAllRecords(recordType, {
+        operator: "between",
+        startTime: startTime,
+        endTime: syncEndTime
+      });
     }
     catch (err) {
       console.log(err)
-      setTypeStatus(recordTypes[i], { state: 'failed', error: String(err && err.message ? err.message : err) });
+      const error = formatSyncError(err);
+      runSucceeded = false;
+      firstError = firstError || error;
+      syncStatus.failedTypes = [...new Set([...syncStatus.failedTypes, recordType])];
+      setTypeStatus(recordType, { state: 'failed', error });
       continue;
     }
-    console.log(recordTypes[i]);
-    numRecords += records.length;
-    syncStatus.numRecords = numRecords;
-    setTypeStatus(recordTypes[i], { count: records.length });
-    if (records.length === 0) {
-      setTypeStatus(recordTypes[i], { state: 'skipped' });
-    }
 
-    if (['SleepSession', 'Speed', 'HeartRate'].includes(recordTypes[i])) {
-      console.log("INSIDE IF - ", recordTypes[i])
-      const batchType = recordTypes[i];
-      for (let j = 0; j < records.length; j++) {
-        console.log("INSIDE FOR", j, recordTypes[i])
-        setTimeout(async () => {
-          let recordFailed = false;
-          try {
-            let record = await readRecord(batchType, records[j].metadata.id);
-            await axios.post(`${apiBase}/api/v2/sync/${batchType}`, {
-              data: record
-            }, {
-              headers: {
-                "Authorization": `Bearer ${login}`
-              }
-            })
-          }
-          catch (err) {
-            console.log(err)
-            recordFailed = true;
-          }
+    console.log(recordType);
 
-          numRecordsSynced += 1;
-          // Per-type progress for this batched type; mark done once all of its
-          // records have been attempted. Track a sticky error so a single
-          // failed record leaves the type 'failed' even if later ones succeed.
-          const t = syncStatus.types[batchType] || { state: 'syncing', count: records.length, synced: 0, error: null };
-          const synced = (t.synced || 0) + 1;
-          const stickyError = t.error || (recordFailed ? 'one or more records failed to upload' : null);
-          const allDone = synced >= records.length;
-          setTypeStatus(batchType, {
-            synced,
-            error: stickyError,
-            state: allDone ? (stickyError ? 'failed' : 'done') : 'syncing',
-          });
-          syncStatus.numRecordsSynced = numRecordsSynced;
-          notifySyncStatus();
-          try {
-            ReactNativeForegroundService.update({
-              id: 1244,
-              title: 'HCGateway Sync Progress',
-              message: `HCGateway is currently syncing... [${numRecordsSynced}/${numRecords}]`,
-              icon: 'ic_launcher',
-              setOnlyAlertOnce: true,
-              color: '#000000',
-              progress: {
-                max: numRecords,
-                curr: numRecordsSynced,
-              }
-            })
-
-            if (numRecordsSynced == numRecords) {
-              ReactNativeForegroundService.update({
-                id: 1244,
-                title: 'HCGateway Sync Progress',
-                message: `HCGateway is working in the background to sync your data.`,
-                icon: 'ic_launcher',
-                setOnlyAlertOnce: true,
-                color: '#000000',
-              })
-            }
-          }
-          catch { }
-        }, j * 3000)
-      }
-    }
-
-    else {
-      try {
-        await axios.post(`${apiBase}/api/v2/sync/${recordTypes[i]}`, {
-          data: records
-        }, {
-          headers: {
-            "Authorization": `Bearer ${login}`
-          }
-        });
-        setTypeStatus(recordTypes[i], { synced: records.length, state: records.length === 0 ? 'skipped' : 'done' });
-      }
-      catch (err) {
-        console.log(err)
-        setTypeStatus(recordTypes[i], { state: 'failed', error: String(err && err.message ? err.message : err) });
-      }
-      numRecordsSynced += records.length;
-      syncStatus.numRecordsSynced = numRecordsSynced;
+    try {
+      syncStatus.phase = 'uploading';
       notifySyncStatus();
-      try {
-        ReactNativeForegroundService.update({
-          id: 1244,
-          title: 'HCGateway Sync Progress',
-          message: `HCGateway is currently syncing... [${numRecordsSynced}/${numRecords}]`,
-          icon: 'ic_launcher',
-          setOnlyAlertOnce: true,
-          color: '#000000',
-          progress: {
-            max: numRecords,
-            curr: numRecordsSynced,
-          }
-        })
-
-        if (numRecordsSynced == numRecords) {
-          ReactNativeForegroundService.update({
-            id: 1244,
-            title: 'HCGateway Sync Progress',
-            message: `HCGateway is working in the background to sync your data.`,
-            icon: 'ic_launcher',
-            setOnlyAlertOnce: true,
-            color: '#000000',
-          })
-        }
-      }
-      catch { }
+      await uploadRecords(recordType, records);
+    }
+    catch (err) {
+      console.log(err)
+      const error = formatSyncError(err);
+      runSucceeded = false;
+      firstError = firstError || error;
+      syncStatus.failedTypes = [...new Set([...syncStatus.failedTypes, recordType])];
+      setTypeStatus(recordType, { state: 'failed', error });
     }
   }
 
-  // Mark the run finished. Batched types (HeartRate/Speed/SleepSession) may
-  // still be flushing via setTimeout, but the read/upload dispatch is complete.
+  if (runSucceeded) {
+    lastSync = syncEndTime;
+    lastSuccessfulSyncAt = syncEndTime;
+    lastSyncError = null;
+    await setPlain('lastSync', syncEndTime);
+    await setPlain('lastSuccessfulSyncAt', syncEndTime);
+    await delkey('lastSyncError');
+    Toast.show({
+      type: 'success',
+      text1: 'Sync completed',
+      text2: `${syncStatus.numRecordsSynced} records uploaded.`,
+    });
+  } else {
+    lastSyncError = firstError || 'one or more record types failed';
+    await setPlain('lastSyncError', lastSyncError);
+    Toast.show({
+      type: 'error',
+      text1: 'Sync completed with errors',
+      text2: 'Last successful sync was not advanced.',
+    });
+  }
+
   syncStatus.running = false;
   syncStatus.finishedAt = new Date().toISOString();
+  syncStatus.phase = runSucceeded ? 'completed' : 'completed_with_errors';
+  syncStatus.error = runSucceeded ? null : lastSyncError;
+  syncStatus.lastSuccessfulSyncAt = lastSuccessfulSyncAt;
   syncStatus.currentType = null;
   notifySyncStatus();
+  resetForegroundMessage();
 }
 
 const handlePush = async (message) => {
@@ -666,19 +767,23 @@ export default Sentry.wrap(function App() {
               if (res) taskDelay = Number(res);
             })
 
-          ReactNativeForegroundService.add_task(() => sync(), {
-            delay: taskDelay,
-            onLoop: true,
-            taskId: 'hcgateway_sync',
-            onError: e => console.log(`Error logging:`, e),
-          });
+          if (!foregroundTasksRegistered) {
+            ReactNativeForegroundService.add_task(() => sync(), {
+              delay: taskDelay,
+              onLoop: true,
+              taskId: 'hcgateway_sync',
+              onError: e => console.log(`Error logging:`, e),
+            });
 
-          ReactNativeForegroundService.add_task(() => refreshTokenFunc(), {
-            delay: 10800 * 1000,
-            onLoop: true,
-            taskId: 'refresh_token',
-            onError: e => console.log(`Error logging:`, e),
-          });
+            ReactNativeForegroundService.add_task(() => refreshTokenFunc(), {
+              delay: 10800 * 1000,
+              onLoop: true,
+              taskId: 'refresh_token',
+              onError: e => console.log(`Error logging:`, e),
+            });
+
+            foregroundTasksRegistered = true;
+          }
 
           ReactNativeForegroundService.start({
             id: 1244,
@@ -707,11 +812,13 @@ export default Sentry.wrap(function App() {
   };
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.screenContent} keyboardShouldPersistTaps="handled">
       {login &&
-        <View>
+        <View style={styles.panel}>
           <Text style={{ fontSize: 20, marginVertical: 10 }}>You are currently logged in.</Text>
-          <Text style={{ fontSize: 17, marginVertical: 10 }}>Last Sync: {lastSync}</Text>
+          <Text style={{ fontSize: 17, marginVertical: 10 }}>Last successful sync: {lastSuccessfulSyncAt || lastSync || 'Never'}</Text>
+          <Text style={styles.statusMetaText}>Last attempt: {lastSyncAttemptAt || syncStatusView.lastAttemptAt || 'Never'}</Text>
+          {!!lastSyncError && <Text style={styles.errorText}>Last error: {lastSyncError}</Text>}
 
           {/* ---- Sync status panel: per-record-type breakdown ---- */}
           <View style={styles.statusPanel}>
@@ -719,9 +826,19 @@ export default Sentry.wrap(function App() {
               <Text style={styles.statusHeader}>Sync Status</Text>
               <Text style={styles.statusState}>
                 {syncStatusView.running
-                  ? `Syncing${syncStatusView.currentType ? ` ${syncStatusView.currentType}…` : '…'}`
-                  : (syncStatusView.finishedAt ? 'Idle (last run complete)' : 'Idle')}
+                  ? `${syncStatusView.phase === 'uploading' ? 'Uploading' : 'Reading'}${syncStatusView.currentType ? ` ${syncStatusView.currentType}...` : '...'}`
+                  : (syncStatusView.finishedAt ? (syncStatusView.error ? 'Idle (last run had errors)' : 'Idle (last run complete)') : 'Idle')}
               </Text>
+            </View>
+
+            <View style={styles.statusMeta}>
+              <Text style={styles.statusMetaText}>Window: {syncStatusView.windowStart || '-'} to {syncStatusView.windowEnd || '-'}</Text>
+              <Text style={styles.statusMetaText}>Pages read: {syncStatusView.pagesRead || 0} | Upload requests: {syncStatusView.uploadRequests || 0}</Text>
+              <Text style={styles.statusMetaText}>History access: {syncStatusView.historyPermissionGranted === null ? 'not needed' : (syncStatusView.historyPermissionGranted ? 'granted' : 'limited to 30 days')}</Text>
+              <Text style={styles.statusMetaText}>Background read: {syncStatusView.backgroundPermissionGranted === null ? 'unknown' : (syncStatusView.backgroundPermissionGranted ? 'granted' : 'not granted')}</Text>
+              {(syncStatusView.failedTypes || []).length > 0 && (
+                <Text style={styles.errorText}>Failed types: {syncStatusView.failedTypes.join(', ')}</Text>
+              )}
             </View>
 
             {(syncStatusView.numRecords > 0) && (
@@ -778,6 +895,7 @@ export default Sentry.wrap(function App() {
               taskDelay = hours * 60 * 60 * 1000;
               setPlain('taskDelay', String(taskDelay));
               ReactNativeForegroundService.update_task(() => sync(), {
+                taskId: 'hcgateway_sync',
                 delay: taskDelay,
               })
               Toast.show({
@@ -862,6 +980,7 @@ export default Sentry.wrap(function App() {
             <Button
               title={`Sync Full History (${historyDays} days)`}
               color="#6a1b9a"
+              disabled={syncStatusView.running}
               onPress={async () => {
                 if (historyDays > 30) {
                   const granted = await requestHistoryPermission();
@@ -969,6 +1088,7 @@ export default Sentry.wrap(function App() {
           <View style={{ marginTop: 10, marginBottom: 10 }}>
             <Button
               title={useCustomDates ? "Sync Selected Range" : "Sync Now (Default)"}
+              disabled={syncStatusView.running}
               onPress={() => {
                 if (!useCustomDates) {
                   sync();
@@ -998,7 +1118,7 @@ export default Sentry.wrap(function App() {
         </View>
       }
       {!login &&
-        <View>
+        <View style={styles.panel}>
           <Text style={{
             fontSize: 30,
             fontWeight: 'bold',
@@ -1070,19 +1190,26 @@ export default Sentry.wrap(function App() {
 
       <StatusBar style="dark" />
       <Toast />
-    </View>
+    </ScrollView>
   );
 });;
 
 const styles = StyleSheet.create({
   container: {
     backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: '100%',
     width: '100%',
-    textAlign: "center",
-    padding: 50
+  },
+
+  screenContent: {
+    alignItems: 'center',
+    padding: 24,
+    paddingTop: 44,
+    paddingBottom: 60,
+  },
+
+  panel: {
+    width: '100%',
+    maxWidth: 430,
   },
 
   input: {
@@ -1091,7 +1218,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 4,
     padding: 10,
-    width: 350,
+    width: '100%',
     fontSize: 17
   },
 
@@ -1149,6 +1276,22 @@ const styles = StyleSheet.create({
     padding: 12,
     marginVertical: 10,
     backgroundColor: '#fafafa',
+  },
+
+  statusMeta: {
+    marginTop: 8,
+  },
+
+  statusMetaText: {
+    fontSize: 12,
+    color: '#555',
+    marginTop: 2,
+  },
+
+  errorText: {
+    fontSize: 12,
+    color: '#b71c1c',
+    marginTop: 4,
   },
 
   statusHeader: {

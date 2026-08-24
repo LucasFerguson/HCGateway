@@ -9,7 +9,7 @@
         "expo-build-properties",
         {
           "android": {
-            "compileSdkVersion": 34,
+            "compileSdkVersion": 35,
             "targetSdkVersion": 34,
             "minSdkVersion": 26
           }
@@ -41,6 +41,7 @@
       "package": "org.lucasferguson.hcgateway",
       "permissions": [
         "android.permission.health.READ_HEALTH_DATA_HISTORY",
+        "android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND",
         "android.permission.health.READ_ACTIVE_CALORIES_BURNED",
         "android.permission.health.READ_BASAL_BODY_TEMPERATURE",
         "android.permission.health.READ_BASAL_METABOLIC_RATE",
@@ -50,6 +51,7 @@
         "android.permission.health.READ_BODY_TEMPERATURE",
         "android.permission.health.READ_BONE_MASS",
         "android.permission.health.READ_CERVICAL_MUCUS",
+        "android.permission.health.READ_CYCLING_PEDALING_CADENCE",
         "android.permission.health.READ_DISTANCE",
         "android.permission.health.READ_EXERCISE",
         "android.permission.health.READ_ELEVATION_GAINED",
@@ -70,6 +72,7 @@
         "android.permission.health.READ_SLEEP",
         "android.permission.health.READ_SPEED",
         "android.permission.health.READ_STEPS",
+        "android.permission.health.READ_STEPS_CADENCE",
         "android.permission.health.READ_TOTAL_CALORIES_BURNED",
         "android.permission.health.READ_VO2_MAX",
         "android.permission.health.READ_WEIGHT",

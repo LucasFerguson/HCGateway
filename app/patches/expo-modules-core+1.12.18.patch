@@ -1,0 +1,13 @@
+diff --git a/node_modules/expo-modules-core/android/src/main/java/expo/modules/adapters/react/permissions/PermissionsService.kt b/node_modules/expo-modules-core/android/src/main/java/expo/modules/adapters/react/permissions/PermissionsService.kt
+index 18ef6b9..13cb2aa 100644
+--- a/node_modules/expo-modules-core/android/src/main/java/expo/modules/adapters/react/permissions/PermissionsService.kt
++++ b/node_modules/expo-modules-core/android/src/main/java/expo/modules/adapters/react/permissions/PermissionsService.kt
+@@ -163,7 +163,7 @@ class PermissionsService(val context: Context) : InternalModule, Permissions {
+   override fun isPermissionPresentInManifest(permission: String): Boolean {
+     try {
+       context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)?.run {
+-        return requestedPermissions.contains(permission)
++        return requestedPermissions?.contains(permission) == true
+       }
+       return false
+     } catch (e: PackageManager.NameNotFoundException) {
