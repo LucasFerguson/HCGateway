@@ -16,7 +16,8 @@ For the current implementation checkpoint and recommended next work, start with
 [doc/session-handoff.md](doc/session-handoff.md).
 
 - [x] **Backend analytics engine.** Ported the dashboard's
-  `health-analytics-v6` TypeScript behavior to Python, including multi-device
+  `health-analytics-v6` TypeScript behavior to Python and extended it as
+  `health-analytics-v7`, including multi-device
   sleep reconciliation, daily metrics, sleep debt/consistency, and experimental
   healthspan estimates. A separate leased worker writes encrypted, immutable
   MongoDB runs; authenticated snapshot, daily, status, config, rebuild, and
@@ -209,6 +210,16 @@ docker compose logs -f analytics-worker
 docker compose down       # preserves the bind-mounted ./db data
 docker compose up -d
 ```
+
+To report the on-disk database size from anywhere, run:
+
+```bash
+./calculate-database-folder-disk-usage-in-gigabytes.sh
+```
+
+It prints decimal GB, binary GiB, and exact bytes. If host permissions prevent
+reading MongoDB's files, it falls back to measuring `/data/db` through the
+running database container.
 
 Do not add `--volumes` to `down` unless database deletion is intentional. On
 this host, read the MongoDB/kernel compatibility note in
