@@ -80,7 +80,7 @@ paths:
         description: 'Can be one of the following: activeCaloriesBurned, basalBodyTemperature,
           basalMetabolicRate, bloodGlucose, bloodPressure, bodyFat, bodyTemperature,
           boneMass, cervicalMucus, distance, exerciseSession, elevationGained, floorsClimbed,
-          heartRate, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
+          heartRate, heartRateVariabilityRmssd, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
           nutrition, ovulationTest, oxygenSaturation, power, respiratoryRate, restingHeartRate,
           sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
           wheelchairPushes'
@@ -116,7 +116,7 @@ paths:
         description: 'Can be one of the following: activeCaloriesBurned, basalBodyTemperature,
           basalMetabolicRate, bloodGlucose, bloodPressure, bodyFat, bodyTemperature,
           boneMass, cervicalMucus, distance, exerciseSession, elevationGained, floorsClimbed,
-          heartRate, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
+          heartRate, heartRateVariabilityRmssd, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
           nutrition, ovulationTest, oxygenSaturation, power, respiratoryRate, restingHeartRate,
           sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
           wheelchairPushes'
@@ -150,7 +150,7 @@ paths:
         description: 'Can be one of the following: activeCaloriesBurned, basalBodyTemperature,
           basalMetabolicRate, bloodGlucose, bloodPressure, bodyFat, bodyTemperature,
           boneMass, cervicalMucus, distance, exerciseSession, elevationGained, floorsClimbed,
-          heartRate, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
+          heartRate, heartRateVariabilityRmssd, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
           nutrition, ovulationTest, oxygenSaturation, power, respiratoryRate, restingHeartRate,
           sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
           wheelchairPushes'
@@ -246,6 +246,8 @@ paths:
       description: >-
         Return the frontend-oriented health day contract plus nearby-day summaries.
         Every requested metric includes an explicit availability status and missing-data note.
+        Recovery and strain are provisional, non-clinical, non-proprietary estimates
+        whose model version, component quality, and limitations are exposed in the response.
       security:
       - bearerAuth: []
       parameters:

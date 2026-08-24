@@ -2,7 +2,7 @@
 
 HCGateway keeps encrypted Health Connect records as its source of truth. A
 separate Python worker decrypts the supported analytics signals, normalizes
-them, runs `health-analytics-v7`, and writes encrypted, immutable
+them, runs `health-analytics-v8.1`, and writes encrypted, immutable
 prepared runs back to each user's MongoDB database.
 
 The implementation is a behavioral port of the dashboard repository's
@@ -30,14 +30,20 @@ The day contract includes:
 
 - sleep duration, window, stage totals, and stage segments;
 - a fixed-target sleep-need percentage clearly marked `partial`;
-- experimental cardiovascular strain and its quality metadata;
+- provisional Recovery readiness and experimental cardiovascular strain with quality metadata;
 - hourly heart-rate min/p25/mean/p75/max candlesticks;
 - hourly steps, workouts, daily supporting metrics, and latest observation;
-- explicit placeholders for Recovery, strain target, schedule blocks, HRV,
+- explicit placeholders for strain target, schedule blocks, missing HRV,
   skin-temperature deviation, and bed/wake preferences.
 
-Recovery and dynamic sleep need are not inferred from incomplete inputs. A
-missing value is represented by a status and reason, never by a numeric zero.
+Recovery v1 is a provisional, non-clinical heuristic. It combines sleep duration
+(30%), HRV change from a trailing 28-day personal median (35%), resting-heart-rate
+change from its trailing median (25%), and sleep consistency (10%). At least seven
+prior days establish each physiological baseline. Missing components are reweighted,
+but a score requires sleep plus either calibrated RHR or HRV; a score without HRV is
+explicitly `partial`. The weights and response curves are intentionally flagged for
+future validation and must not be represented as a proprietary wearable score.
+A missing value is represented by a status and reason, never by a numeric zero.
 
 ### `GET /api/v2/analytics/snapshot`
 
@@ -50,7 +56,7 @@ dashboard contract unchanged:
   "source": "health-connect",
   "sleepSessions": [],
   "analytics": {
-    "algorithmVersion": "health-analytics-v7",
+    "algorithmVersion": "health-analytics-v8.1",
     "sourceFingerprint": "...",
     "configurationFingerprint": "...",
     "processedAt": "...",
@@ -65,7 +71,9 @@ dashboard contract unchanged:
     "totalCalories": {},
     "restingHeartRate": {},
     "weight": {},
-    "strain": {}
+    "heartRateVariability": {},
+    "strain": {},
+    "recovery": {}
   }
 }
 ```
@@ -74,7 +82,7 @@ The response has a run-specific `ETag` and `Cache-Control: private, no-cache`.
 A `404` means the first background run is not ready yet; inspect the status
 endpoint and retry.
 
-Detailed `dayViews`, daily strain, and workout-strain timelines are deliberately
+Detailed `dayViews`, daily strain/recovery, and workout-strain timelines are deliberately
 excluded from this legacy monolithic snapshot. They are stored per date and
 served by `/api/v2/analytics/day`, avoiding MongoDB's 16 MiB document limit
 after encryption.
@@ -87,7 +95,7 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
 
 ```json
 {
-  "runId": "health-analytics-v7:<source>:<configuration>",
+  "runId": "health-analytics-v8.1:<source>:<configuration>",
   "count": 1,
   "days": [
     {
@@ -100,8 +108,10 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
       "activeCalories": null,
       "totalCalories": null,
       "restingHeartRate": null,
+      "heartRateVariability": null,
       "weight": null,
       "strain": null,
+      "recovery": null,
       "dayView": null
     }
   ]
@@ -147,10 +157,17 @@ Sync uploads and database-side deletes automatically queue a debounced run.
 - Healthspan is explicitly an experimental estimate, not a clinical prediction.
   It uses available sleep, steps, resting-heart-rate, and weight factors; a
   birth date is required for age-based outputs.
-- Strain is an explicitly non-proprietary cardiovascular estimate. It
+- Recovery is an explicitly provisional, non-clinical readiness estimate. Complete
+  scores require sleep, HRV, RHR, and sleep consistency; partial scores may use sleep
+  plus a calibrated RHR baseline while HRV is absent. Its heuristic weights and curves
+  remain a documented future-validation task.
+- Strain is an explicitly provisional, non-proprietary cardiovascular estimate. It
   integrates gap-limited heart-rate effort and logarithmically maps load to
-  0–21. It withholds scores when calibration or coverage is inadequate and
-  does not claim WHOOP parity or muscular-load measurement.
+  0–21. Empirical calibration may now publish with `low` confidence when a substantial
+  history has a credible but sub-140 observed high; this is not a measured maximum.
+  It still withholds scores when calibration or coverage is inadequate and does not
+  claim WHOOP parity or muscular-load measurement. Calibration and load mapping remain
+  explicitly flagged for future personal-outcome validation.
 
 Source identity is the Health Connect data-origin package (for example WHOOP or
 Fitbit/Pixel Watch). New syncs also preserve device and recording provenance on

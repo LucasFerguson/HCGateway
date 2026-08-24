@@ -17,9 +17,11 @@ For the current implementation checkpoint and recommended next work, start with
 
 - [x] **Backend analytics engine.** Ported the dashboard's
   `health-analytics-v6` TypeScript behavior to Python and extended it as
-  `health-analytics-v7`, including multi-device
+  `health-analytics-v8.1`, including multi-device
   sleep reconciliation, daily metrics, sleep debt/consistency, and experimental
-  healthspan estimates. A separate leased worker writes encrypted, immutable
+  healthspan, Recovery, and cardiovascular strain estimates. Recovery and strain
+  are provisional, non-clinical heuristics with explicit quality gates and TODOs
+  for longitudinal validation. A separate leased worker writes encrypted, immutable
   MongoDB runs; authenticated snapshot, daily, status, config, rebuild, and
   inventory endpoints are frontend-ready. See
   [doc/frontend-data-model.md](doc/frontend-data-model.md).

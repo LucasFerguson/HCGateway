@@ -15,7 +15,7 @@ Dashboard. The TypeScript implementation in
 reference, but only `/root/HCGateway` was modified.
 
 - `api/analytics_engine/pipeline.py` ports `health-analytics-v6` to Python;
-  the current frontend day-view contract is versioned `health-analytics-v7`.
+  the current prepared algorithm is `health-analytics-v8.1`.
 - `api/analytics_engine/repository.py` decrypts and normalizes sleep sessions,
   steps, active/total calories, resting heart rate, and weight.
 - `api/analytics_engine/worker.py` runs independently from Flask and claims
@@ -35,6 +35,13 @@ reference, but only `/root/HCGateway` was modified.
 - Experimental cardiovascular strain is implemented separately from the
   proprietary WHOOP algorithm. It requires credible personal zone calibration
   and adequate heart-rate coverage before publishing a score.
+- Provisional Recovery v1 combines sleep, trailing personal RHR/HRV baselines,
+  and sleep consistency. It can publish a clearly marked partial score without
+  HRV, but its heuristic weights and curves are explicitly pending validation.
+- Strain v2.1 permits low-confidence empirical calibration from a substantial
+  history whose observed high is credible but below 140 bpm. The response exposes
+  that confidence, retains strict daily coverage gates, and does not create
+  synthetic strain rows for entirely unobserved dates between samples.
 - `GET /api/v2/sync/status` exposes a server-observed upload heartbeat. Its
   120-second active window indicates recent authenticated ingestion, not the
   durable state of the Android background task.
@@ -85,6 +92,33 @@ The primary account's completed run reported zero normalization issues. Do not
 merge or rename these accounts automatically; `lucas` is currently the account
 with the longest and largest raw history.
 
+### Full-history sync checkpoint (2026-08-24)
+
+The replacement/full-history Android sync increased `lucas` from 89,754 to
+350,682 raw records (260,928 additional records; roughly 3.9 times the earlier
+corpus). The inventory now includes 235,337 heart-rate records containing about
+3.94 million valid samples over 203 dates, 597 sleep sessions, 338 exercise
+sessions, 153 resting-heart-rate records, 153 respiratory-rate records, and 151
+oxygen-saturation records. Coverage begins 2025-03-17 and reaches 2026-08-24.
+The completed v7 normalization run reported zero issues.
+
+The prior Strain v1 run published no daily scores solely because its empirical
+99.5th-percentile high was 131 bpm, below its hard 140-bpm calibration gate.
+This finding motivated Strain v2.1's explicitly low-confidence empirical tier;
+it did not justify treating 131 bpm as a measured personal maximum.
+
+The deployed `health-analytics-v8.1` real-data rebuild completed with zero
+normalization issues. It produced 143 explicitly partial Recovery scores from
+357 sleep dates (no complete score because HRV count remains zero) and 182
+publishable Strain scores across 205 local-date entries. Recovery scores ranged
+from 28–96 and Strain from 0.61–18.66. These ranges are implementation
+diagnostics, not evidence that the heuristic models are personally validated.
+
+The 3.94-million-sample rebuild took about eight minutes and briefly used several
+GiB of memory. Add incremental, affected-date analytics processing before treating
+continuous high-frequency uploads as operationally cheap; the durable queue is
+safe, but full-history work after every debounce is unnecessarily expensive.
+
 An obsolete `_analyticsDaily` collection from an earlier prototype may still
 exist in a user database. The production implementation uses underscore-separated
 collection names such as `_analytics_daily` and does not read the prototype.
@@ -93,7 +127,7 @@ uses it.
 
 ## Verification already performed
 
-The current image passes 30 tests covering pipeline and strain behavior,
+The current image passes 34 tests covering pipeline, Recovery, and strain behavior,
 fingerprints, MongoDB idempotency, job revision/lease safety, bearer
 authentication, user isolation, endpoint shape, day shaping, sync activity,
 configuration validation, and daily date ranges:
