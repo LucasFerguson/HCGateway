@@ -15,6 +15,8 @@ from analytics_engine.pipeline import (
     process_health_data,
     reconcile_sleep_events,
     score_healthspan_factors,
+    source_fingerprint,
+    summarize_sleep_session,
 )
 from analytics_engine.repository import empty_raw_health_data
 
@@ -55,6 +57,63 @@ class SleepParityTests(unittest.TestCase):
         overnight = session("overnight", "Fitbit", "2026-07-27T04:43:00Z", "2026-07-27T09:39:00Z")
         nap = session("nap", "Fitbit", "2026-07-27T18:00:00Z", "2026-07-27T18:45:00Z")
         self.assertEqual(len(reconcile_sleep_events([overnight, nap], UTC_CONTEXT)), 2)
+
+    def test_prefers_credible_detailed_stages_within_two_percent_of_longest_window(self):
+        generic = session("generic", "WHOOP", "2026-07-27T04:00:00Z", "2026-07-27T12:00:00Z")
+        detailed = session("detailed", "Fitbit", "2026-07-27T04:03:00Z", "2026-07-27T11:59:00Z", [
+            {"startAt": "2026-07-27T04:03:00Z", "endAt": "2026-07-27T08:00:00Z", "kind": "light"},
+            {"startAt": "2026-07-27T08:00:00Z", "endAt": "2026-07-27T10:00:00Z", "kind": "deep"},
+            {"startAt": "2026-07-27T10:00:00Z", "endAt": "2026-07-27T11:59:00Z", "kind": "rem"},
+        ])
+        event = reconcile_sleep_events([generic, detailed], UTC_CONTEXT)[0]
+        self.assertEqual(event["primary"]["id"], "detailed")
+        self.assertEqual(event["primarySelection"]["version"], "sleep-primary-v2")
+        self.assertTrue(event["hasCredibleDetailedStages"])
+
+    def test_keeps_longest_when_detailed_alternative_is_below_duration_floor(self):
+        generic = session("generic", "WHOOP", "2026-07-27T04:00:00Z", "2026-07-27T12:00:00Z")
+        detailed = session("detailed", "Fitbit", "2026-07-27T04:20:00Z", "2026-07-27T11:50:00Z", [
+            {"startAt": "2026-07-27T04:20:00Z", "endAt": "2026-07-27T08:00:00Z", "kind": "light"},
+            {"startAt": "2026-07-27T08:00:00Z", "endAt": "2026-07-27T10:00:00Z", "kind": "deep"},
+            {"startAt": "2026-07-27T10:00:00Z", "endAt": "2026-07-27T11:50:00Z", "kind": "rem"},
+        ])
+        self.assertEqual(reconcile_sleep_events([generic, detailed], UTC_CONTEXT)[0]["primary"]["id"], "generic")
+
+    def test_primary_tie_break_is_independent_of_input_order(self):
+        left = session("b", "watch", "2026-07-27T04:00:00Z", "2026-07-27T12:00:00Z")
+        right = session("a", "watch", "2026-07-27T04:00:00Z", "2026-07-27T12:00:00Z")
+        first = reconcile_sleep_events([left, right], UTC_CONTEXT)[0]["primary"]["id"]
+        second = reconcile_sleep_events([right, left], UTC_CONTEXT)[0]["primary"]["id"]
+        self.assertEqual((first, second), ("a", "a"))
+
+    def test_reconciles_overlapping_recordings_before_local_wake_date_assignment(self):
+        before_midnight = session("before", "watch", "2026-01-02T00:00:00Z", "2026-01-02T05:59:00Z")
+        after_midnight = session("after", "watch", "2026-01-02T00:00:00Z", "2026-01-02T06:01:00Z")
+        events = reconcile_sleep_events(
+            [before_midnight, after_midnight], AnalyticsContext(homeTimeZone="America/Chicago")
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["date"], "2026-01-02")
+
+    def test_offset_equivalent_recordings_reconcile_and_expose_chicago_local_times(self):
+        utc = session("utc", "one", "2026-01-02T05:00:00Z", "2026-01-02T12:00:00Z")
+        chicago = session("offset", "two", "2026-01-01T23:00:00-06:00", "2026-01-02T06:00:00-06:00")
+        event = reconcile_sleep_events(
+            [utc, chicago], AnalyticsContext(homeTimeZone="America/Chicago")
+        )[0]
+        self.assertEqual(event["recordingCount"], 2)
+        self.assertEqual(event["timeZone"], "America/Chicago")
+        self.assertEqual(event["localStartAt"], "2026-01-01T23:00:00.000-06:00")
+        self.assertEqual(event["localEndAt"], "2026-01-02T06:00:00.000-06:00")
+
+    def test_no_stage_summary_preserves_window_sleep_and_marks_stages_missing(self):
+        summary = summarize_sleep_session(
+            session("missing", "watch", "2026-07-27T04:00:00Z", "2026-07-27T12:00:00Z", [])
+        )
+        self.assertEqual(summary["windowMinutes"], 480)
+        self.assertEqual(summary["sleepMinutes"], 480)
+        self.assertEqual(summary["stageDataStatus"], "missing")
+        self.assertFalse(summary["hasCredibleStageTimeline"])
 
     def test_sleep_debt_thresholds_and_missing_days(self):
         summaries = [
@@ -167,11 +226,19 @@ class HealthspanAndPipelineTests(unittest.TestCase):
         self.assertEqual(first["sourceFingerprint"], second["sourceFingerprint"])
         self.assertEqual(first["healthspan"]["status"], "calibrating")
         self.assertEqual(set(first), {
-            "algorithmVersion", "sourceFingerprint", "configurationFingerprint", "processedAt", "sleepEvents",
+            "algorithmVersion", "timeZone", "sourceFingerprint", "configurationFingerprint", "processedAt", "sleepEvents",
             "dailySleep", "sleepDebt", "sleepConsistency", "healthspan", "deviceSleep", "steps",
             "activeCalories", "totalCalories", "restingHeartRate", "heartRateVariability", "weight",
             "strain", "recovery", "dayViews"
         })
+
+    def test_hrv_changes_are_part_of_the_source_fingerprint(self):
+        raw = empty_raw_health_data()
+        first = source_fingerprint(raw)
+        raw["heartRateVariabilities"] = [{
+            "id": "hrv", "source": "watch", "observedAt": "2026-01-01T12:00:00Z", "milliseconds": 42,
+        }]
+        self.assertNotEqual(first, source_fingerprint(raw))
 
 
 if __name__ == "__main__":

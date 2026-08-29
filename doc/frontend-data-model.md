@@ -2,7 +2,7 @@
 
 HCGateway keeps encrypted Health Connect records as its source of truth. A
 separate Python worker decrypts the supported analytics signals, normalizes
-them, runs `health-analytics-v8.1`, and writes encrypted, immutable
+them, runs `health-analytics-v8.3`, and writes encrypted, immutable
 prepared runs back to each user's MongoDB database.
 
 The implementation is a behavioral port of the dashboard repository's
@@ -56,7 +56,8 @@ dashboard contract unchanged:
   "source": "health-connect",
   "sleepSessions": [],
   "analytics": {
-    "algorithmVersion": "health-analytics-v8.1",
+    "algorithmVersion": "health-analytics-v8.3",
+    "timeZone": "America/Chicago",
     "sourceFingerprint": "...",
     "configurationFingerprint": "...",
     "processedAt": "...",
@@ -95,7 +96,7 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
 
 ```json
 {
-  "runId": "health-analytics-v8.1:<source>:<configuration>",
+  "runId": "health-analytics-v8.3:<source>:<configuration>",
   "count": 1,
   "days": [
     {
@@ -149,11 +150,23 @@ Sync uploads and database-side deletes automatically queue a debounced run.
 ## Canonical and device-comparison rules
 
 - Sleep sessions with at least 80% overlap relative to the shorter recording
-  are grouped. The longest is canonical while every device recording remains
-  available for comparison. Sleep belongs to the local date on which it ends.
+  are grouped before local wake-date assignment, so near-identical recordings
+  ending on opposite sides of local midnight do not become two events. Every
+  device recording remains available for comparison. Candidates within 98% of
+  the longest window are ranked by credible stage detail and stage-timeline
+  quality, then duration and stable source/record identifiers; a richer
+  recording cannot displace one more than 2% longer. The prepared event exposes
+  the selection method, duration threshold, stage coverage, quality flags, and
+  per-stage minutes. The selected recording's local end date owns the event.
+- Every wake date labels its longest event `main` and any additional separate
+  sleep as `supplemental`. Supplemental events remain part of daily sleep and
+  are not automatically called naps because split sleep and night-shift sleep
+  require a distinct classification policy.
 - Sleep stages exclude awake and unknown time. If stages are absent, the full
-  session duration is used. Naps stay separate and still contribute to daily
-  sleep.
+  session duration is used and `stageDataStatus` remains `missing`; stage zeros
+  must not be presented as observed. Separate supplemental sleep still
+  contributes to daily sleep. Daily stage totals cover all events on that wake
+  date, while the headline `window` is explicitly scoped to the main event.
 - Steps and calorie intervals are split proportionally at local-midnight
   boundaries. A day's canonical source is selected by interval coverage, then
   observation count. Steps are rounded.
@@ -180,6 +193,42 @@ Source identity is the Health Connect data-origin package (for example WHOOP or
 Fitbit/Pixel Watch). New syncs also preserve device and recording provenance on
 the raw record, so later algorithms can become device-aware without rewriting
 history.
+
+## Timezone ownership
+
+Health Connect currently uploads absolute timestamps as UTC `Z` instants. A
+live audit of 728 sleep sessions and 62,454 stage timestamps found no naive
+timestamps and no sleep-specific source timezone/offset fields. The primary
+account's configured analytics timezone is `America/Chicago`; it is therefore
+the authoritative timezone for day ownership, local-midnight splitting, hourly
+buckets, local-today defaults, and sleep wake-date assignment.
+
+The backend owns those semantic conversions. Prepared timestamps remain
+canonical absolute UTC instants, while analytics and prepared sleep events
+expose the IANA `timeZone`. Sleep events also expose `localStartAt` and
+`localEndAt` with the Chicago offset applicable at each instant, including DST
+changes. These local strings are explanatory projections, not replacement
+identities for the UTC instants.
+
+The frontend owns presentation only. It must format every absolute instant with
+the API-provided `timeZone` (for example `Intl.DateTimeFormat(..., {timeZone})`),
+never the browser/server timezone. The focused day UI follows this rule. The
+legacy sleep-stage graph in the separate frontend repository still uses
+browser-local `toLocaleTimeString` and must be fixed or retired there; this
+backend must not distort UTC timestamps to compensate for it.
+
+Timezone-aware ingestion now rejects naive timestamps atomically with `400`,
+and normalization emits canonical UTC strings while retaining raw source text
+in the encrypted source-of-truth records. Exercise-session source offsets are
+preserved as provenance, but they do not override the configured home timezone.
+Travel-aware day assignment needs an explicit future policy because sleep
+records currently carry no original location or timezone.
+
+Local-midnight splitting honors 23-hour and 25-hour Chicago DST days. The
+focused API's hourly arrays intentionally remain 24 wall-clock-number buckets:
+the missing spring hour has no observations and both fall-back occurrences of
+the repeated hour share one bucket. Consumers needing an elapsed-time DST axis
+will require an offset/fold-aware contract rather than guessing client-side.
 
 ## MongoDB prepared collections
 

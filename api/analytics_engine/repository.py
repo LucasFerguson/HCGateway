@@ -1,7 +1,7 @@
 """Read and normalize encrypted HCGateway records without modifying them."""
 
 from .crypto import decrypt_json
-from .pipeline import parse_instant
+from .time_utils import parse_instant, utc_iso
 
 
 STAGE_KINDS = {1: "awake", 2: "asleep", 3: "unknown", 4: "light", 5: "deep", 6: "rem"}
@@ -14,11 +14,11 @@ def _envelope(document, require_end=False):
     end = document.get("end")
     if not record_id or not isinstance(source, str) or not isinstance(start, str):
         raise ValueError("invalid record envelope")
-    parse_instant(start)
+    start = utc_iso(start)
     if require_end and not isinstance(end, str):
         raise ValueError("record requires an end timestamp")
     if isinstance(end, str):
-        parse_instant(end)
+        end = utc_iso(end)
     return record_id, source, start, end
 
 
@@ -39,11 +39,12 @@ def _sleep(document, data):
     stages = []
     for stage in data.get("stages", []):
         stage_start, stage_end = stage.get("startTime"), stage.get("endTime")
-        parse_instant(stage_start)
-        parse_instant(stage_end)
+        stage_start = utc_iso(stage_start)
+        stage_end = utc_iso(stage_end)
         stage_id = _number(stage.get("stage"), "sleep stage", integer=True)
         stages.append({"startAt": stage_start, "endAt": stage_end, "kind": STAGE_KINDS.get(stage_id, "unknown")})
-    return {
+    stages.sort(key=lambda stage: (parse_instant(stage["startAt"]), parse_instant(stage["endAt"]), stage["kind"]))
+    result = {
         "id": record_id,
         "source": source,
         "startAt": start,
@@ -52,6 +53,11 @@ def _sleep(document, data):
         "notes": data.get("notes"),
         "stages": stages,
     }
+    if data.get("startZoneOffset") is not None or data.get("endZoneOffset") is not None:
+        result["sourceZoneOffsets"] = {
+            "start": data.get("startZoneOffset"), "end": data.get("endZoneOffset")
+        }
+    return result
 
 
 def _steps(document, data):
@@ -91,7 +97,7 @@ def _heart_rate(document, data):
     samples = []
     for sample in data.get("samples", []):
         observed_at = sample.get("time")
-        parse_instant(observed_at)
+        observed_at = utc_iso(observed_at)
         bpm = _number(sample.get("beatsPerMinute"), "heart rate", strictly_positive=True)
         samples.append({"observedAt": observed_at, "bpm": bpm})
     return {"id": record_id, "source": source, "startAt": start, "endAt": end, "samples": samples}
@@ -114,7 +120,7 @@ def _oxygen_saturation(document, data):
 def _exercise_session(document, data):
     record_id, source, start, end = _envelope(document, require_end=True)
     exercise_type = _number(data.get("exerciseType"), "exercise type", integer=True)
-    return {
+    result = {
         "id": record_id,
         "source": source,
         "startAt": start,
@@ -123,6 +129,11 @@ def _exercise_session(document, data):
         "title": data.get("title"),
         "notes": data.get("notes"),
     }
+    if data.get("startZoneOffset") is not None or data.get("endZoneOffset") is not None:
+        result["sourceZoneOffsets"] = {
+            "start": data.get("startZoneOffset"), "end": data.get("endZoneOffset")
+        }
+    return result
 
 
 MAPPERS = {

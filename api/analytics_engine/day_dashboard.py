@@ -11,21 +11,19 @@ from collections import defaultdict
 from statistics import median
 from zoneinfo import ZoneInfo
 
+from .sleep import STAGE_NAMES, select_main_sleep_event
+from .time_utils import date_key, local_today, parse_instant
+
 
 CONTRACT_VERSION = "health-day-v1"
 
 
 def _instant(value):
-    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+    return parse_instant(value)
 
 
 def _date(value, zone):
-    return _instant(value).astimezone(zone).date().isoformat()
-
-
-def _iso(value):
-    return value.astimezone(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return date_key(value, zone)
 
 
 def _percentile(values, fraction):
@@ -50,14 +48,6 @@ def _metric(status, value=None, unit=None, note=None, source=None, quality_flags
 
 def _lookup(values):
     return {item["date"]: item for item in values}
-
-
-def _stage_minutes(event):
-    totals = defaultdict(float)
-    for stage in event["primary"].get("stages", []):
-        minutes = max(0, (_instant(stage["endAt"]) - _instant(stage["startAt"])).total_seconds() / 60)
-        totals[stage["kind"]] += minutes
-    return {name: round(totals.get(name, 0), 1) for name in ("deep", "light", "rem", "asleep", "awake", "unknown")}
 
 
 def _hourly_heart_rate(by_source, zone):
@@ -144,7 +134,7 @@ def _observed_dates(raw, analytics, zone):
 
 def empty_day(date, context, processed_at=None):
     zone = ZoneInfo(context.homeTimeZone)
-    today = dt.datetime.now(dt.timezone.utc).astimezone(zone).date().isoformat()
+    today = local_today(zone)
     state = "future" if date > today else "recorded"
     return {
         "contractVersion": CONTRACT_VERSION,
@@ -163,6 +153,7 @@ def empty_day(date, context, processed_at=None):
             "hrv": _metric("missing", unit="ms", note="No heart-rate-variability RMSSD measurement was recorded for this day."),
             "restingHeartRate": _metric("missing", unit="bpm", note="No resting-heart-rate measurement was recorded for this day."),
             "respiratoryRate": _metric("missing", unit="breaths_per_minute", note="No respiratory-rate measurement was recorded for this day."),
+            "oxygenSaturation": _metric("missing", unit="percent", note="No oxygen-saturation measurement was recorded for this day."),
             "skinTemperatureDeviation": _metric("missing", unit="celsius_delta", note="Skin temperature is not currently present in the database."),
             "steps": _metric("missing", unit="steps", note="No steps were recorded for this day."),
             "calories": _metric("missing", unit="kcal", note="No calorie total was recorded for this day."),
@@ -223,13 +214,27 @@ def build_day_views(raw, analytics, context):
         view["notes"] = []
         events = sorted(sleep_by_date.get(date, []), key=lambda item: _instant(item["primary"]["startAt"]))
         if events:
-            main = max(events, key=lambda item: (_instant(item["primary"]["endAt"]) - _instant(item["primary"]["startAt"])).total_seconds())
+            main = select_main_sleep_event(events)
             sleep = daily_sleep[date]
-            stages = _stage_minutes(main)
+            stages = {name: round(sleep["stageMinutes"][name], 1) for name in STAGE_NAMES}
             view["headlineScores"]["sleepDuration"] = _metric(
                 "available", round(sleep["sleepMinutes"], 1), "minutes", source=main["primary"]["source"],
                 window={"startAt": main["primary"]["startAt"], "endAt": main["primary"]["endAt"]},
-                stageMinutes=stages, eventCount=sleep["eventCount"], recordingCount=sleep["recordingCount"],
+                windowScope="main_event", valueScope="all_sleep_events", stageMinutes=stages,
+                stageDataStatus=sleep["stageDataStatus"], unclassifiedSleepMinutes=round(sleep["unclassifiedSleepMinutes"], 1),
+                eventCount=sleep["eventCount"], recordingCount=sleep["recordingCount"],
+                mainEvent={
+                    "id": main["id"], "role": main["role"], "source": main["primary"]["source"],
+                    "startAt": main["primary"]["startAt"], "endAt": main["primary"]["endAt"],
+                    "windowMinutes": round(main["windowMinutes"], 1), "sleepMinutes": round(main["sleepMinutes"], 1),
+                    "stageDataStatus": main["stageDataStatus"], "qualityFlags": main["qualityFlags"],
+                },
+                events=[{
+                    "id": event["id"], "role": event["role"], "source": event["primary"]["source"],
+                    "startAt": event["primary"]["startAt"], "endAt": event["primary"]["endAt"],
+                    "windowMinutes": round(event["windowMinutes"], 1), "sleepMinutes": round(event["sleepMinutes"], 1),
+                    "stageDataStatus": event["stageDataStatus"], "recordingCount": event["recordingCount"],
+                } for event in events],
             )
             debt_day = debt.get(date)
             if debt_day:

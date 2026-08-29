@@ -14,7 +14,6 @@ ph = PasswordHasher()
 
 from cryptography.fernet import Fernet
 import base64, secrets, datetime
-from zoneinfo import ZoneInfo
 
 from analytics_engine.context import AnalyticsContext, context_for_user, validate_context
 from analytics_engine.crypto import cipher_for_user
@@ -23,6 +22,7 @@ from analytics_engine.jobs import enqueue_job
 from analytics_engine.service import device_inventory_for_user, inventory_for_user
 from analytics_engine.store import current_metadata, read_daily, read_snapshot
 from analytics_engine.sync_status import COLLECTION as SYNC_STATUS_COLLECTION, record_upload, status_response
+from analytics_engine.time_utils import local_today, parse_instant
 
 v2 = Blueprint('v2', __name__, url_prefix='/api/v2/')
 
@@ -177,6 +177,31 @@ def sync(method):
     data = request.json['data']
     if type(data) != list:
         data = [data]
+    try:
+        for index, item in enumerate(data):
+            if not isinstance(item, dict) or not isinstance(item.get('metadata'), dict):
+                raise ValueError(f'record {index} requires metadata')
+            metadata = item['metadata']
+            if not metadata.get('id') or not metadata.get('dataOrigin'):
+                raise ValueError(f'record {index} requires metadata id and dataOrigin')
+            if 'time' in item:
+                parse_instant(item['time'])
+            elif 'startTime' in item and 'endTime' in item:
+                start_instant = parse_instant(item['startTime'])
+                end_instant = parse_instant(item['endTime'])
+                if end_instant < start_instant:
+                    raise ValueError(f'record {index} endTime must not precede startTime')
+            else:
+                raise ValueError(f'record {index} requires time or startTime and endTime')
+            for stage in item.get('stages', []):
+                stage_start = parse_instant(stage.get('startTime'))
+                stage_end = parse_instant(stage.get('endTime'))
+                if stage_end < stage_start:
+                    raise ValueError(f'record {index} contains a stage whose endTime precedes startTime')
+            for sample in item.get('samples', []):
+                parse_instant(sample.get('time'))
+    except (AttributeError, TypeError, ValueError) as error:
+        return jsonify({'error': str(error)}), 400
     db = mongo['hcgateway_'+userid]
     collection = db[method]
     collection.create_index([("start", pymongo.ASCENDING), ("app", pymongo.ASCENDING)])
@@ -421,9 +446,7 @@ def analyticsDay():
         return jsonify({'error': 'invalid user id'}), 400
     context = context_for_user(user)
     try:
-        requested_date = request.args.get('date') or datetime.datetime.now(
-            datetime.timezone.utc
-        ).astimezone(ZoneInfo(context.homeTimeZone)).date().isoformat()
+        requested_date = request.args.get('date') or local_today(context.homeTimeZone)
         center = datetime.date.fromisoformat(requested_date)
         radius = int(request.args.get('radius', 7))
         if not 0 <= radius <= 7:

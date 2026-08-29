@@ -9,7 +9,8 @@ import uuid
 from dotenv import load_dotenv
 from pymongo import MongoClient
 
-from .jobs import claim_job, complete_job, enqueue_missing_users, fail_job
+from .jobs import claim_job, complete_job, enqueue_job, enqueue_missing_users, fail_job
+from .pipeline import ALGORITHM_VERSION
 from .service import process_user
 
 
@@ -48,7 +49,13 @@ def run(drain=False):
     try:
         mongo.admin.command("ping")
         control = mongo["hcgateway"]
-        enqueue_missing_users(control, control["users"].find({}, {"_id": 1}))
+        users = list(control["users"].find({}, {"_id": 1}))
+        enqueue_missing_users(control, users)
+        for user in users:
+            database = mongo["hcgateway_" + str(user["_id"])]
+            current = database["_analytics_current"].find_one({"_id": "current"}, {"algorithmVersion": 1})
+            if current and current.get("algorithmVersion") != ALGORITHM_VERSION:
+                enqueue_job(control, user["_id"], reason="algorithm_upgrade", delay_seconds=0)
         worker_id = f"{socket.gethostname()}:{uuid.uuid4().hex[:8]}"
         poll_seconds = max(1, int(os.environ.get("ANALYTICS_POLL_SECONDS", "15")))
         while not stopping:

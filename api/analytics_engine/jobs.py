@@ -26,9 +26,12 @@ def enqueue_job(control_db, user_id, reason="sync", delay_seconds=15):
                 "reason": reason,
                 "requestedAt": now,
                 "notBefore": now + dt.timedelta(seconds=max(0, delay_seconds)),
+                "attempts": 0,
             },
-            "$setOnInsert": {"attempts": 0},
-            "$unset": {"completedAt": "", "error": ""},
+            "$unset": {
+                "completedAt": "", "failedAt": "", "startedAt": "", "leaseUntil": "",
+                "workerId": "", "error": "", "result": "",
+            },
         },
         upsert=True,
         return_document=ReturnDocument.AFTER,
@@ -82,23 +85,26 @@ def complete_job(control_db, job, result):
     now = utcnow()
     revision = job.get("requestedRevision", 1)
     completed = control_db[COLLECTION].update_one(
-        {"_id": job["_id"], "status": "running", "requestedRevision": revision},
+        {
+            "_id": job["_id"], "status": "running", "requestedRevision": revision,
+            "workerId": job.get("workerId"),
+        },
         {
             "$set": {"status": "completed", "completedAt": now, "result": result},
             "$unset": {"leaseUntil": "", "workerId": "", "error": ""},
         },
     )
-    if completed.modified_count == 0:
-        control_db[COLLECTION].update_one(
-            {"_id": job["_id"], "status": {"$ne": "queued"}},
-            {"$set": {"status": "queued", "notBefore": now}},
-        )
+    return completed.modified_count == 1
 
 
 def fail_job(control_db, job, error, retry_delay_seconds=60):
     now = utcnow()
-    control_db[COLLECTION].update_one(
-        {"_id": job["_id"]},
+    failed = control_db[COLLECTION].update_one(
+        {
+            "_id": job["_id"], "status": "running",
+            "requestedRevision": job.get("requestedRevision", 1),
+            "workerId": job.get("workerId"),
+        },
         {
             "$set": {
                 "status": "queued" if job.get("attempts", 0) < 5 else "failed",
@@ -109,3 +115,4 @@ def fail_job(control_db, job, error, retry_delay_seconds=60):
             "$unset": {"leaseUntil": "", "workerId": ""},
         },
     )
+    return failed.modified_count == 1

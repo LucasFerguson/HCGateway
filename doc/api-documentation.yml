@@ -98,6 +98,34 @@ paths:
                 type: array
                 items:
                   "$ref": "#/components/schemas/dataObject"
+  "/api/v2/sync/{method}":
+    post:
+      operationId: syncHealthConnectData
+      description: Store one or more Health Connect records in the authenticated user's encrypted source-of-truth collection and queue analytics preparation. Timestamped fields must be absolute ISO 8601 instants with UTC Z or an explicit offset. The complete batch is validated before any record is written.
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: method
+        required: true
+        schema:
+          type: string
+        description: Health Connect record type such as sleepSession, heartRate, steps, or exerciseSession.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/pushParameters"
+      responses:
+        '200':
+          description: The complete batch was stored and analytics work was queued.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/silentObject"
+        '400':
+          description: The batch is rejected atomically when a record is missing required metadata or uses a malformed, naive, or reversed timestamp.
   "/api/v2/push/{method}":
     put:
       operationId: pushData

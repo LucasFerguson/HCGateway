@@ -153,6 +153,32 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
         analytics_status = self.client.get("/api/v2/analytics/status", headers=self.auth()).get_json()
         self.assertTrue(analytics_status["phoneSync"]["observedActive"])
 
+    def test_sync_rejects_naive_timestamps_atomically(self):
+        response = self.client.post(
+            "/api/v2/sync/Steps",
+            headers=self.auth(),
+            json={"data": [
+                {
+                    "metadata": {"id": "valid", "dataOrigin": "test.phone"},
+                    "startTime": "2026-01-02T12:00:00Z",
+                    "endTime": "2026-01-02T13:00:00Z",
+                    "count": 100,
+                },
+                {
+                    "metadata": {"id": "naive", "dataOrigin": "test.phone"},
+                    "startTime": "2026-01-02T12:00:00",
+                    "endTime": "2026-01-02T13:00:00",
+                    "count": 100,
+                },
+            ]},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("explicit offset", response.get_json()["error"])
+        self.assertEqual(
+            self.mongo["hcgateway_" + self.user_id]["steps"].count_documents({"_id": {"$in": ["valid", "naive"]}}),
+            0,
+        )
+
     def test_device_inventory_preserves_provenance_and_flags_ambiguous_sources(self):
         records = [
             {

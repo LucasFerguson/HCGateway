@@ -15,7 +15,7 @@ Dashboard. The TypeScript implementation in
 reference, but only `/root/HCGateway` was modified.
 
 - `api/analytics_engine/pipeline.py` ports `health-analytics-v6` to Python;
-  the current prepared algorithm is `health-analytics-v8.1`.
+  the current prepared algorithm is `health-analytics-v8.3`.
 - `api/analytics_engine/repository.py` decrypts and normalizes sleep sessions,
   steps, active/total calories, resting heart rate, and weight.
 - `api/analytics_engine/worker.py` runs independently from Flask and claims
@@ -84,11 +84,57 @@ Authorization: Bearer <token>
 It returns exactly `generatedAt`, `source`, `sleepSessions`, and `analytics`,
 matching the reference dashboard's expected snapshot shape.
 
+### Sleep preparation cleanup checkpoint (2026-08-29)
+
+- `health-analytics-v8.2` extracts shared sleep/time preparation primitives so
+  the day API and future calendar worker consume the same prepared durations,
+  stage totals, quality flags, roles, and reconciliation decision metadata.
+- Overlapping recordings are reconciled before wake-date assignment. Among
+  recordings at least 98% as long as the longest, a valid detailed-stage
+  timeline is preferred without hardcoding a device vendor; duration and stable
+  identifiers break remaining ties. A live read-only audit found this would
+  replace 30 near-equal generic-stage primaries, usually sacrificing about three
+  minutes of window length for substantially richer stage data.
+- Daily headline sleep and stage totals now both cover every event, including
+  supplemental sleep, while the single headline window is explicitly marked as
+  the main event. Prepared events use `main`/`supplemental`, not an inferred nap
+  label.
+- HRV is now included in the source fingerprint. Previously, an HRV-only upload
+  could calculate changed Recovery output but reuse the old run ID and be
+  discarded as unchanged.
+- Worker startup queues an `algorithm_upgrade` job when a user's current
+  prepared run was produced by an older algorithm version.
+- Analytics retry attempts are now scoped to the requested revision, and
+  completion/failure updates require the claiming worker and revision. A stale
+  lease holder can no longer overwrite a newer queued revision.
+- `doc/calendar-worker-plan.md` records the deferred thin delivery-worker design.
+  Calendar HTTP behavior remains unimplemented pending the finalized
+  FluidCalendar contract and destination choice.
+
+### Timezone consolidation checkpoint (2026-08-29)
+
+- `health-analytics-v8.3` makes the configured IANA home timezone authoritative
+  for analytics semantics while retaining canonical UTC instants. The primary
+  account is configured as `America/Chicago`.
+- Live data contained 728 UTC `Z` sleep-session windows and 62,454 UTC `Z` stage
+  timestamps, with no sleep source offset. Exercise records do contain source
+  offsets, now retained as provenance without overriding the home-zone policy.
+- Shared helpers now own strict instant parsing, UTC/local rendering, local date
+  keys, local-today calculation, and DST-aware local-midnight splitting. Naive
+  uploads are rejected atomically instead of being silently interpreted as UTC.
+- Prepared analytics expose `timeZone`; sleep events additionally expose
+  offset-aware `localStartAt`/`localEndAt`. Frontends must format UTC instants in
+  that supplied zone, never the browser zone.
+- Chicago spring/fall transitions are tested as 23/25 elapsed-hour local days.
+  Hourly day arrays remain 24 wall-clock-number buckets and merge the repeated
+  fall-back hour; an offset/fold-aware timeline is future contract work.
+
 ## Analytics behavior worth preserving
 
 - Sleep recordings with at least 80% overlap relative to the shorter session
-  are grouped; the longest is canonical and all device recordings remain
-  available for comparison.
+  are grouped before wake-date assignment. Near-longest candidates may win on
+  validated stage quality under the documented 98% duration floor; all device
+  recordings and selection reasons remain available for comparison.
 - Sleep stages exclude awake/unknown time; sessions without stages use their
   full duration. Naps remain distinct but contribute to daily sleep.
 - Interval totals are split across local calendar days and sources are selected
@@ -153,8 +199,10 @@ uses it.
 
 ## Verification already performed
 
-The current image passes 35 tests covering pipeline, Recovery, and strain behavior,
-fingerprints, MongoDB idempotency, job revision/lease safety, bearer
+The current image passes 54 tests covering pipeline, Recovery, and strain behavior,
+fingerprints (including HRV), sleep quality selection and cross-date
+reconciliation, prepared sleep reads, MongoDB idempotency, stale-worker and
+per-revision retry safety, bearer
 authentication, user isolation, endpoint shape, day shaping, sync activity,
 configuration validation, daily date ranges, and device-provenance inventory:
 
@@ -241,7 +289,7 @@ are ignored. Never commit or print their secret values.
 ## Recommended next session
 
 1. Read this file and `doc/frontend-data-model.md`, then run `git status`,
-   `docker compose ps`, and the 35-test command above.
+   `docker compose ps`, and the 54-test command above.
 2. Set the primary user's real `homeTimeZone`, desired sleep target, and
    optional birth date through `PUT /api/v2/analytics/config`; do not guess
    personal configuration.

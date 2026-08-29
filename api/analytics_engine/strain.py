@@ -6,10 +6,10 @@ logarithmic 0--21 scale.  Scores are withheld when calibration or heart-rate
 coverage is insufficient.
 """
 
-import datetime as dt
 import math
 from collections import defaultdict
-from zoneinfo import ZoneInfo
+
+from .time_utils import parse_instant as _instant, split_by_local_day, zone_info
 
 
 ALGORITHM_VERSION = "experimental-cardio-strain-v2.1"
@@ -32,16 +32,6 @@ WORKOUT_MIN_SPAN_SECONDS = 10 * 60
 WORKOUT_MIN_COVERAGE_RATIO = 0.80
 REFERENCE_LOAD_MINUTES = 600.0
 TIMELINE_INTERVAL_SECONDS = 15 * 60
-
-
-def _instant(value):
-    if isinstance(value, dt.datetime):
-        parsed = value
-    else:
-        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed.astimezone(dt.timezone.utc)
 
 
 def _sample_value(sample):
@@ -175,22 +165,10 @@ def _score(load_minutes):
     return round(min(21.0, 21.0 * math.log1p(load_minutes) / math.log1p(REFERENCE_LOAD_MINUTES)), 2)
 
 
-def _split_at_local_midnight(start, end, time_zone):
-    zone = time_zone if isinstance(time_zone, ZoneInfo) else ZoneInfo(time_zone)
-    cursor = start
-    while cursor < end:
-        local = cursor.astimezone(zone)
-        next_date = local.date() + dt.timedelta(days=1)
-        boundary = dt.datetime.combine(next_date, dt.time(), tzinfo=zone).astimezone(dt.timezone.utc)
-        piece_end = min(end, boundary)
-        yield local.date().isoformat(), cursor, piece_end
-        cursor = piece_end
-
-
 def _segments(samples, thresholds, time_zone):
     by_day = defaultdict(list)
     all_segments = []
-    zone = ZoneInfo(time_zone)
+    zone = zone_info(time_zone)
     for (start, start_bpm), (end, end_bpm) in zip(samples, samples[1:]):
         elapsed = (end - start).total_seconds()
         if elapsed <= 0:
@@ -202,7 +180,7 @@ def _segments(samples, thresholds, time_zone):
         if not accepted and start.astimezone(zone).date() != end.astimezone(zone).date():
             continue
         average_bpm = (start_bpm + end_bpm) / 2
-        for date, piece_start, piece_end in _split_at_local_midnight(start, end, zone):
+        for date, piece_start, piece_end in split_by_local_day(start, end, zone):
             segment = {
                 "date": date,
                 "start": piece_start,
@@ -288,7 +266,7 @@ def calculate_strain(samples, time_zone="UTC", zone_thresholds=None, resting_hr=
     those six keys.  If absent, a conservative empirical calibration is attempted
     from ``historical_samples`` and ``resting_hr``.
     """
-    ZoneInfo(time_zone)  # validate eagerly
+    zone_info(time_zone)  # validate eagerly
     thresholds = _validated_thresholds(zone_thresholds)
     if thresholds is not None:
         calibration = {"available": True, "method": "personalized_thresholds", "reasons": [],

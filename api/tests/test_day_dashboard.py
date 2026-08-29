@@ -50,6 +50,41 @@ class DayDashboardTests(unittest.TestCase):
         self.assertEqual(day["headlineScores"]["strain"]["status"], "available")
         self.assertLessEqual(len(day["timeline"]["strain"]), 34)
 
+    def test_daily_sleep_headline_aggregates_main_sleep_and_supplemental_sleep_consistently(self):
+        raw = empty_raw_health_data()
+        raw["sleepSessions"] = [
+            {
+                "id": "main", "source": "watch", "startAt": "2026-01-01T23:00:00Z",
+                "endAt": "2026-01-02T06:00:00Z", "title": None, "notes": None,
+                "stages": [{
+                    "startAt": "2026-01-01T23:00:00Z", "endAt": "2026-01-02T06:00:00Z", "kind": "light",
+                }],
+            },
+            {
+                "id": "supplemental", "source": "watch", "startAt": "2026-01-02T14:00:00Z",
+                "endAt": "2026-01-02T15:00:00Z", "title": None, "notes": None,
+                "stages": [{
+                    "startAt": "2026-01-02T14:00:00Z", "endAt": "2026-01-02T15:00:00Z", "kind": "deep",
+                }],
+            },
+        ]
+        analytics = process_health_data(raw)
+        day = next(item for item in analytics["dayViews"] if item["date"] == "2026-01-02")
+        sleep = day["headlineScores"]["sleepDuration"]
+        self.assertEqual(sleep["value"], 480)
+        self.assertEqual(sleep["stageMinutes"]["light"], 420)
+        self.assertEqual(sleep["stageMinutes"]["deep"], 60)
+        self.assertEqual(sleep["valueScope"], "all_sleep_events")
+        self.assertEqual([(item["id"], item["role"]) for item in sleep["events"]], [
+            ("main", "main"), ("supplemental", "supplemental")
+        ])
+
+    def test_empty_day_includes_oxygen_saturation_placeholder(self):
+        analytics = process_health_data(empty_raw_health_data())
+        from analytics_engine.day_dashboard import empty_day
+        day = empty_day("2026-01-01", AnalyticsContext(), analytics["processedAt"])
+        self.assertEqual(day["supportingMetrics"]["oxygenSaturation"]["status"], "missing")
+
 
 if __name__ == "__main__":
     unittest.main()

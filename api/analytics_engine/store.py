@@ -202,3 +202,19 @@ def read_daily(database, cipher, start=None, end=None, limit=400):
             query["date"]["$lte"] = end
     documents = database[DAILY].find(query).sort("date", ASCENDING).limit(limit)
     return [decrypt_json(cipher, document["data"]) for document in documents], current
+
+
+def read_sleep_events(database, cipher, start=None, end=None, limit=1000):
+    """Read reconciled sleep events from the atomically selected prepared run."""
+    current = database[CURRENT].find_one({"_id": "current"})
+    if not current:
+        return [], None
+    query = {"runId": current["runId"]}
+    if start or end:
+        query["date"] = {}
+        if start:
+            query["date"]["$gte"] = start
+        if end:
+            query["date"]["$lte"] = end
+    documents = database[SLEEP_EVENTS].find(query).sort("date", ASCENDING).limit(limit)
+    return [decrypt_json(cipher, document["data"]) for document in documents], current

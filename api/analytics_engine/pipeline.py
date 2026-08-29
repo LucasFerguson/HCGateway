@@ -1,4 +1,4 @@
-"""Health analytics v8.1: v7 plus provisional Recovery and Strain v2.1."""
+"""Health analytics v8.2: reusable sleep preparation plus Recovery and Strain v2.1."""
 
 import datetime as dt
 import hashlib
@@ -6,40 +6,31 @@ import json
 import math
 from collections import defaultdict
 from statistics import median
-from zoneinfo import ZoneInfo
-
 from .context import AnalyticsContext, validate_context
 from .day_dashboard import build_day_views
 from .recovery import calculate_recovery
+from .sleep import (
+    aggregate_daily_sleep,
+    choose_primary_sleep_recording,
+    reconcile_sleep_events,
+    select_main_sleep_event,
+    session_minutes,
+    sleep_minutes,
+    stage_minutes,
+    summarize_sleep_session,
+)
 from .strain import calculate_strain
+from .time_utils import date_key, local_minute_of_day, parse_instant, split_by_local_day
 
 
-ALGORITHM_VERSION = "health-analytics-v8.1"
+ALGORITHM_VERSION = "health-analytics-v8.3"
 HEALTHSPAN_MODEL_VERSION = "experimental-healthspan-v1"
-SAME_SLEEP_EVENT_OVERLAP_RATIO = 0.8
 DAY_SECONDS = 86_400
 YEAR_DAYS = 365.2425
 
 
-def parse_instant(value: str) -> dt.datetime:
-    parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
-    return parsed
-
-
 def iso_now():
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def date_key(value: str | dt.datetime, time_zone: str) -> str:
-    instant = parse_instant(value) if isinstance(value, str) else value
-    return instant.astimezone(ZoneInfo(time_zone)).date().isoformat()
-
-
-def local_minute_of_day(value: str, time_zone: str) -> int:
-    local = parse_instant(value).astimezone(ZoneInfo(time_zone))
-    return local.hour * 60 + local.minute
 
 
 def js_round(value: float, digits: int = 0):
@@ -95,6 +86,7 @@ def source_fingerprint(raw):
             "activeCalories",
             "totalCalories",
             "restingHeartRates",
+            "heartRateVariabilities",
             "weights",
             "heartRates",
             "respiratoryRates",
@@ -103,81 +95,6 @@ def source_fingerprint(raw):
         )
     }
     return fingerprint(ordered)
-
-
-def session_minutes(session):
-    return max(0.0, (parse_instant(session["endAt"]) - parse_instant(session["startAt"])).total_seconds() / 60)
-
-
-def sleep_minutes(session):
-    stages = session.get("stages", [])
-    if not stages:
-        return session_minutes(session)
-    return sum(
-        max(0.0, (parse_instant(stage["endAt"]) - parse_instant(stage["startAt"])).total_seconds() / 60)
-        for stage in stages
-        if stage["kind"] not in ("awake", "unknown")
-    )
-
-
-def reconcile_sleep_events(sessions, context):
-    by_date = defaultdict(list)
-    for session in sessions:
-        # A dashboard day owns the sleep that ended on that date. This also
-        # keeps same-day naps intuitive while assigning overnight sleep to its
-        # wake date instead of the previous evening.
-        by_date[date_key(session["endAt"], context.homeTimeZone)].append(session)
-    events = []
-    for date, daily in by_date.items():
-        parent = list(range(len(daily)))
-
-        def find(index):
-            if parent[index] != index:
-                parent[index] = find(parent[index])
-            return parent[index]
-
-        def union(left, right):
-            left_root, right_root = find(left), find(right)
-            if left_root != right_root:
-                parent[right_root] = left_root
-
-        for left_index, left in enumerate(daily):
-            for right_index in range(left_index + 1, len(daily)):
-                right = daily[right_index]
-                overlap = max(
-                    0.0,
-                    (
-                        min(parse_instant(left["endAt"]), parse_instant(right["endAt"]))
-                        - max(parse_instant(left["startAt"]), parse_instant(right["startAt"]))
-                    ).total_seconds(),
-                )
-                shorter = min(session_minutes(left), session_minutes(right)) * 60
-                ratio = 0 if shorter == 0 else overlap / shorter
-                if ratio >= SAME_SLEEP_EVENT_OVERLAP_RATIO:
-                    union(left_index, right_index)
-        groups = defaultdict(list)
-        for index, session in enumerate(daily):
-            groups[find(index)].append(session)
-        for recordings in groups.values():
-            ranked = sorted(recordings, key=session_minutes, reverse=True)
-            primary = ranked[0]
-            events.append({"id": primary["id"], "date": date, "primary": primary, "recordings": ranked})
-    return sorted(events, key=lambda event: parse_instant(event["primary"]["startAt"]))
-
-
-def aggregate_daily_sleep(events):
-    groups = defaultdict(list)
-    for event in events:
-        groups[event["date"]].append(event)
-    return [
-        {
-            "date": date,
-            "sleepMinutes": sum(sleep_minutes(event["primary"]) for event in daily),
-            "eventCount": len(daily),
-            "recordingCount": sum(len(event["recordings"]) for event in daily),
-        }
-        for date, daily in sorted(groups.items())
-    ]
 
 
 def categorize_debt(minutes):
@@ -259,11 +176,10 @@ def categorize_consistency(score):
 
 
 def calculate_sleep_consistency(events, context):
-    longest = {}
+    by_date = defaultdict(list)
     for event in events:
-        current = longest.get(event["date"])
-        if current is None or session_minutes(event["primary"]) > session_minutes(current["primary"]):
-            longest[event["date"]] = event
+        by_date[event["date"]].append(event)
+    longest = {date: select_main_sleep_event(daily) for date, daily in by_date.items()}
     schedules = sorted(({
         "date": event["date"],
         "source": event["primary"]["source"],
@@ -322,19 +238,6 @@ def calculate_sleep_consistency(events, context):
         "previous30DayAverageScore": mean([day["score"] for day in previous30]),
         "breakdown30Day": breakdown,
     }
-
-
-def split_by_local_day(start, end, time_zone):
-    zone = ZoneInfo(time_zone)
-    cursor = start
-    while cursor < end:
-        local_date = cursor.astimezone(zone).date()
-        next_midnight = dt.datetime.combine(local_date + dt.timedelta(days=1), dt.time.min, tzinfo=zone).astimezone(dt.timezone.utc)
-        boundary = min(end, next_midnight)
-        if boundary <= cursor:
-            boundary = end
-        yield local_date.isoformat(), cursor, boundary
-        cursor = boundary
 
 
 def union_duration(intervals):
@@ -451,9 +354,11 @@ def compare_devices(events):
     for event in events:
         representatives = {}
         for recording in event["recordings"]:
-            existing = representatives.get(recording["source"])
-            if existing is None or sleep_minutes(recording) > sleep_minutes(existing):
-                representatives[recording["source"]] = recording
+            representatives.setdefault(recording["source"], []).append(recording)
+        representatives = {
+            source: choose_primary_sleep_recording(recordings)[0]
+            for source, recordings in representatives.items()
+        }
         durations = [(source, sleep_minutes(recording)) for source, recording in representatives.items()]
         for source, minutes in durations:
             summary = observations.setdefault(source, {"durations": [], "differences": []})
@@ -608,6 +513,7 @@ def process_health_data(raw, context=AnalyticsContext()):
     )
     analytics = {
         "algorithmVersion": ALGORITHM_VERSION,
+        "timeZone": context.homeTimeZone,
         "sourceFingerprint": source_fingerprint(raw),
         "configurationFingerprint": fingerprint(context.as_dict()),
         "processedAt": iso_now(),
