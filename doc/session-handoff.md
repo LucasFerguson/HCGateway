@@ -1,6 +1,6 @@
 # Session handoff: analytics backend
 
-Last updated: 2026-08-24
+Last updated: 2026-08-29
 
 This document is the starting point for the next coding session. The completed
 implementation is documented in detail in
@@ -57,6 +57,22 @@ reference, but only `/root/HCGateway` was modified.
   is an optimization, not server truth; reinstalling or clearing app data loses it.
 - `calculate-database-folder-disk-usage-in-gigabytes.sh` reports decimal GB,
   binary GiB, and exact bytes for the bind-mounted database directory.
+
+### Data-source and Android planning checkpoint (2026-08-29)
+
+- `doc/whoop-health-connect-pixel-watch-4-comparison.md` compares the supplied
+  WHOOP ZIP, WHOOP-origin Health Connect records, Fitbit/likely-Pixel records,
+  other phone/Google Fit sources, Pixel Watch 4 capabilities, and ingestion gaps.
+- Live provenance shows a large Fitbit/Google Health source-only group beginning
+  2026-02-05, consistent with the stated Pixel Watch era, but Fitbit omitted the
+  physical manufacturer/model. Older Fitbit records likely include the 2025
+  Inspire and cannot be split conclusively by package name alone.
+- `app/README.md` is the prioritized Android completion roadmap. Its first data
+  tasks are HRV, the distinct skin-temperature type, exercise routes with
+  explicit consent, and an audit of Pixel/Google Health delivery.
+- Sensitive WHOOP source files live under the ignored local directory
+  `raw-data/whoop/2026-08-24/`, outside MongoDB's `db/` bind mount. Only
+  `raw-data/README.md` is tracked. Never force-add the ZIP or extracted CSVs.
 
 The primary frontend bootstrap contract is:
 
@@ -189,7 +205,15 @@ commit was fetched from `origin/main` and merged without conflicts. At this
 checkpoint local `main` is ahead of `origin/main` by the analytics commits plus
 the merge commit; it has not yet been pushed.
 
+Recent commits are:
+
 ```text
+18e90d3 chore: organize local raw health exports
+2a0cfb9 docs(android): add application completion roadmap
+c095f49 docs: compare WHOOP and Pixel health data sources
+5147ab9 feat: expose Health Connect device provenance
+59cfb42 docs: allow scoped health-data analysis
+e600686 docs: wrap merged sync and analytics handoff
 b622a02 Merge remote-tracking branch 'origin/main'
 a97e4bb docs: record analytics v8.1 production checkpoint
 e0d02b8 feat: add provisional recovery and strain v2.1
@@ -217,7 +241,7 @@ are ignored. Never commit or print their secret values.
 ## Recommended next session
 
 1. Read this file and `doc/frontend-data-model.md`, then run `git status`,
-   `docker compose ps`, and the 34-test command above.
+   `docker compose ps`, and the 35-test command above.
 2. Set the primary user's real `homeTimeZone`, desired sleep target, and
    optional birth date through `PUT /api/v2/analytics/config`; do not guess
    personal configuration.
