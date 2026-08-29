@@ -4,7 +4,8 @@ Snapshot date: **2026-08-24**
 
 This document compares:
 
-1. the supplied `my_whoop_data_2026_08_24.zip` archive;
+1. the supplied `raw-data/whoop/2026-08-24/my_whoop_data_2026_08_24.zip`
+   archive;
 2. raw records actually stored for the primary `lucas` account in HCGateway's
    MongoDB database; and
 3. data a Google Pixel Watch 4 can gather, with a separate check for whether
@@ -183,8 +184,9 @@ must not overwrite original provenance.
 
 ## Sources and project references
 
-- Supplied archive: `my_whoop_data_2026_08_24.zip` (inspected locally, without
-  copying raw values).
+- Supplied archive:
+  `raw-data/whoop/2026-08-24/my_whoop_data_2026_08_24.zip` (inspected locally,
+  without copying raw values).
 - HCGateway uploader record list: [`../app/App.js`](../app/App.js).
 - Backend-supported analytics mappings:
   [`../api/analytics_engine/repository.py`](../api/analytics_engine/repository.py).

@@ -80,6 +80,11 @@ service-account.json
 # Local MongoDB data created by Docker Compose.
 /db/
 
+# Local raw health-data exports and extracted imports. Keep the directory's
+# handling guidance tracked, but never commit its sensitive contents.
+/raw-data/*
+!/raw-data/README.md
+
 # Optional machine-specific Compose overrides.
 /docker-compose.override.yml
 /compose.override.yml
