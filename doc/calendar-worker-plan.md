@@ -1,11 +1,14 @@
 # Calendar sleep export plan
 
-Status: deferred design; no calendar export is implemented yet.
+Status: implemented and deployed. The initial seven-day export delivered seven
+events on 2026-08-29; continuous recent-window polling is active and historical
+backfill remains disabled.
 
 This document records the intended boundary between health analytics and the
-FluidCalendar integration. The first delivery milestone is to export every
-reconciled sleep event, including naps, whose local wake date falls within an
-initial two-week backfill window.
+FluidCalendar integration. The first delivery milestone exports every
+reconciled sleep event, including naps, whose local wake date falls within the
+initial seven-day window. Older history can then advance in bounded, durable
+backfill batches when explicitly enabled.
 
 ## Design goals
 
@@ -62,10 +65,9 @@ any schema improvements made during analytics cleanup.
 
 ### Calendar worker
 
-Add a thin, separately running `calendar-worker` Compose service after the
-prepared sleep contract is settled. It should use the same locally built image
-and import the same `analytics_engine` package as the existing worker. Its work
-is limited to:
+The thin, separately running `calendar-worker` Compose service uses the same
+locally built image and imports the same `analytics_engine` package as the
+existing worker. Its work is limited to:
 
 1. discover completed prepared sleep events that need delivery;
 2. render calendar presentation fields from already computed values;
@@ -135,7 +137,7 @@ Subject to final product choices, the proposed first version is:
 - description containing actual sleep duration, sleep-window duration,
   available stage durations, canonical source, and recording count;
 - no zero-valued substitute for missing stage information; and
-- initial backfill covering today plus the preceding 13 local wake dates in the
+- initial export covering today plus the preceding six local wake dates in the
   configured home timezone.
 
 The calendar description is a presentation projection, not a second prepared
@@ -162,7 +164,7 @@ correction and deletion therefore require the local ledger to retain the
 FluidCalendar event ID, or a future FluidCalendar feature such as an
 integration-owned `source` plus `sourceId` with lookup/upsert semantics.
 
-Before implementation, confirm or extend the API documentation for:
+Future FluidCalendar contract refinements may document:
 
 - the exact shape and truncation/pagination behavior of the windowed read;
 - validation and error response bodies;
@@ -177,28 +179,31 @@ homelab network.
 
 ## Configuration and secrets
 
-Avoid using environment variables for ordinary integration settings. Store
-non-secret, per-user settings through an authenticated HCGateway configuration
-surface, for example:
+The first self-hosted deployment uses root `.env` settings resolved by Docker
+Compose. This keeps the deployment explicit and makes the destination
+selectable without changing code. Compose injects these values only into
+`calendar-worker`; API and analytics-worker continue to receive only
+`api/.env`:
 
-- enabled/disabled state;
-- FluidCalendar base URL;
-- destination feed ID;
-- backfill horizon;
-- event title/presentation preferences; and
-- correction/deletion policy.
+- required `FLUIDCALENDAR_BASE_URL`;
+- required `FLUIDCALENDAR_API_KEY` with write scope;
+- required `CALENDAR_SLEEP_USER_ID`;
+- selectable `CALENDAR_SLEEP_FEED_ID` (defaulting to the supplied Lucas
+  Calendar Private feed);
+- `CALENDAR_SLEEP_INITIAL_LOOKBACK_DAYS` (default 7);
+- `CALENDAR_SLEEP_POLL_SECONDS` (default 300);
+- opt-in `CALENDAR_SLEEP_BACKFILL_ENABLED` (default false);
+- `CALENDAR_SLEEP_BACKFILL_BATCH_DAYS` (default 7); and
+- `CALENDAR_SLEEP_BACKFILL_INTERVAL_SECONDS` (default 86400).
 
-Do not store the raw FluidCalendar API key in source control, Compose YAML, the
-prepared analytics documents, or logs. Prefer a Docker secret mounted as a
-read-only file and have the calendar client read that file. The final design
-must define how a secret is associated with a HCGateway user if more than one
-user enables export.
+Do not store the raw FluidCalendar API key in source control, Compose YAML,
+`api/.env`, prepared analytics documents, or logs. Root `.env` is ignored and
+is used here specifically to avoid exposing the calendar credential to the API
+and analytics containers. A Docker secret or authenticated per-user settings
+surface remains a reasonable future improvement for multi-user deployment.
 
 ## Decisions still open
 
-- Which HCGateway user and FluidCalendar feed receive the initial export?
-- Should the first 14-day window mean today plus 13 prior wake dates, or 14
-  completed dates before today?
 - Should naps use `Sleep` or a distinct `Nap` title, and what analytics-owned
   criterion distinguishes them?
 - When improved reconciliation changes the canonical recording, should the
@@ -206,8 +211,6 @@ user enables export.
 - When a prepared event disappears because source data was deleted or grouping
   changed, should the owned remote event be deleted, retained, or deleted only
   after it is absent from multiple completed analytics runs?
-- Should a provider-backed calendar or a FluidCalendar-local feed be the
-  initial target?
 - Is a ledger-held FluidCalendar event ID sufficient, or should FluidCalendar
   gain first-class integration identity and idempotent upsert?
 - What should happen if the configured feed becomes read-only, disabled, or is
@@ -221,19 +224,22 @@ Deletion must never target an event the integration cannot prove it owns.
    aggregation helpers, reconcile inconsistent consumers, improve and explain
    canonical selection as appropriate, define a stable prepared event shape,
    and add focused tests. Do not add calendar HTTP behavior in this phase.
-2. **Finalize the FluidCalendar contract and settings.** Resolve the open API,
-   destination, correction, deletion, and secret-association decisions. Add
-   authenticated configuration without exposing the API key.
-3. **Build delivery primitives.** Add the FluidCalendar client, deterministic
-   payload renderer, durable ledger/queue, atomic leasing, retry classification,
-   and unit tests using fake HTTP responses.
-4. **Add the separate service.** Introduce the `calendar-worker` entry point and
-   Compose service using the shared image. Verify independent stop/start and
-   ensure calendar failures cannot fail an analytics run.
-5. **Backfill and observe.** Start with a dry-run/report mode, then synchronize
-   the agreed 14-day local-wake-date window. Verify that overlapping device
+2. **Finalize the FluidCalendar contract and settings.** The create-event
+   contract, initial destination, seven-day window, selectable feed, and
+   worker-only secret injection are defined. Correction and deletion policy can
+   be extended without blocking safe create/retry delivery.
+3. **Build delivery primitives.** The FluidCalendar client, deterministic
+   payload renderer, durable ledger/backfill state, leases, retry
+   classification, and fake-HTTP tests form the delivery layer.
+4. **Add the separate service.** The `calendar-worker` entry point and Compose
+   service use the shared image and can be stopped independently without
+   interrupting ingestion or analytics.
+5. **Backfill and observe.** Synchronize the agreed seven-day local-wake-date
+   window first. Verify that overlapping device
    recordings produce one event while separate naps remain separate, and that
-   repeated runs do not duplicate events.
-6. **Enable ongoing reconciliation.** Process new completed analytics runs,
-   exercise correction and deletion policy, document operations, and add API
-   and handoff documentation for every new configuration or status endpoint.
+   repeated runs do not duplicate events. Historical backfill is disabled by
+   default and can advance one configurable date batch per configured interval.
+6. **Enable ongoing reconciliation.** Process new completed analytics runs and
+   observe initial delivery. Exercise correction and deletion policy before
+   automating remote deletion, and document any future API/configuration
+   surface.

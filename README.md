@@ -231,14 +231,15 @@ Follow these steps to set up Firebase:
 2. **Setting up the Environment**
 
    - You’ll need to configure environment variables before starting the services.
-   - Copy the root `.env.example` file to `.env` and set a strong local MongoDB password.
+   - Copy the root `.env.example` file to `.env`, set a strong local MongoDB password, and configure the FluidCalendar sleep-export values. Keep `FLUIDCALENDAR_API_KEY` in this root file so Compose injects it only into `calendar-worker`; do not copy it into `api/.env`.
    - Copy `api/.env.example` to `api/.env` and configure it as necessary. When setting `MONGO_URI`, use `mongodb://root:<the-same-password>@db:27017/hcgateway?authSource=admin`.
 
     - Visit the firebase console > project settings > Service accounts and click generate new private key
     - Save the file as `service-account.json` in the `api/` folder
 
 3. **Running the Containers with Docker Compose**\
-    The project uses Docker Compose for the API, analytics worker, and MongoDB:
+    The project uses Docker Compose for the API, analytics worker, calendar
+    worker, and MongoDB:
     ```bash
    docker compose up -d --build
     ```
@@ -249,9 +250,39 @@ Useful lifecycle commands:
 ```bash
 docker compose ps
 docker compose logs -f analytics-worker
+docker compose logs -f calendar-worker
+docker compose stop calendar-worker   # ingestion and analytics keep running
+docker compose start calendar-worker
 docker compose down       # preserves the bind-mounted ./db data
 docker compose up -d
 ```
+
+### FluidCalendar sleep export
+
+The independent `calendar-worker` reads the current prepared sleep events; it
+does not repeat sleep reconciliation or stage calculations. Set these required
+values in the root `.env` before starting Compose:
+
+- `FLUIDCALENDAR_BASE_URL`: the FluidCalendar origin, without relying on a
+  placeholder host;
+- `FLUIDCALENDAR_API_KEY`: a FluidCalendar API key with write scope; and
+- `CALENDAR_SLEEP_USER_ID`: the HCGateway user whose prepared sleep is exported.
+
+`CALENDAR_SLEEP_FEED_ID` selects the destination calendar and defaults to the
+Lucas Calendar Private feed supplied for this deployment. Change it before
+starting the worker to use another writable calendar. The first successful run
+exports events whose local wake date is today or one of the prior six dates
+(`CALENDAR_SLEEP_INITIAL_LOOKBACK_DAYS=7`). Ongoing polling then picks up newly
+prepared events.
+
+Older history is deliberately disabled by default. To let the worker move
+backward gradually, set `CALENDAR_SLEEP_BACKFILL_ENABLED=true`. It processes at
+most `CALENDAR_SLEEP_BACKFILL_BATCH_DAYS` older wake dates per backfill cycle,
+with cycles separated by `CALENDAR_SLEEP_BACKFILL_INTERVAL_SECONDS`. Delivery
+state and the backfill cursor are durable, so stopping or restarting the
+container does not restart the history from the beginning. FluidCalendar
+requests use `skipIfExists: true`, and the local ledger retains remote IDs and
+payload hashes for safe retries.
 
 To report the on-disk database size from anywhere, run:
 

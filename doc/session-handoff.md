@@ -26,7 +26,7 @@ reference, but only `/root/HCGateway` was modified.
 - Flask exposes authenticated inventory, status, configuration, rebuild,
   snapshot, and daily endpoints under `/api/v2/analytics`.
 - Docker Compose builds the local source into `hcgateway-api:local` and runs
-  separate `api`, `analytics-worker`, and `db` services.
+  separate `api`, `analytics-worker`, `calendar-worker`, and `db` services.
 - Raw syncs now preserve available Health Connect provenance, including device,
   data origin, recording method, and client-record identity/version.
 - `GET /api/v2/analytics/devices` exposes that provenance as an observed device
@@ -107,9 +107,9 @@ matching the reference dashboard's expected snapshot shape.
 - Analytics retry attempts are now scoped to the requested revision, and
   completion/failure updates require the claiming worker and revision. A stale
   lease holder can no longer overwrite a newer queued revision.
-- `doc/calendar-worker-plan.md` records the deferred thin delivery-worker design.
-  Calendar HTTP behavior remains unimplemented pending the finalized
-  FluidCalendar contract and destination choice.
+- `doc/calendar-worker-plan.md` records the thin delivery-worker design. The
+  calendar integration reuses prepared sleep events rather than repeating
+  reconciliation or stage calculations.
 
 ### Timezone consolidation checkpoint (2026-08-29)
 
@@ -128,6 +128,34 @@ matching the reference dashboard's expected snapshot shape.
 - Chicago spring/fall transitions are tested as 23/25 elapsed-hour local days.
   Hourly day arrays remain 24 wall-clock-number buckets and merge the repeated
   fall-back hour; an offset/fold-aware timeline is future contract work.
+
+### FluidCalendar worker checkpoint (2026-08-29)
+
+- `calendar-worker` is a separate Compose service using the same local image and
+  analytics package as the API and analytics worker. It can be stopped without
+  interrupting ingestion or analytics.
+- Calendar presentation consumes the atomically selected prepared sleep events,
+  including supplemental sleep and naps. It posts canonical UTC instants and
+  uses FluidCalendar's exact-match `skipIfExists` behavior plus a durable local
+  ledger for retries and remote identifiers.
+- The destination feed and HCGateway user are configurable. The supplied Lucas
+  Calendar Private feed is the default, while the FluidCalendar base URL and
+  user ID are required deployment values.
+- The initial window is seven local wake dates: today plus the preceding six.
+  Normal polling handles newly prepared events. Historical backfill is disabled
+  by default and, when enabled, advances backward in configurable date batches
+  no more frequently than the configured backfill interval.
+- Store `FLUIDCALENDAR_API_KEY` only in the ignored root `.env`. Compose injects
+  it only into `calendar-worker`; never place the key in `api/.env`, source,
+  prepared analytics, or logs.
+- The configured FluidCalendar origin and Google-backed Lucas Calendar Private
+  feed were authenticated before writing. The initial 2026-08-23 through
+  2026-08-29 Chicago wake-date scan found seven prepared events, including one
+  supplemental session. All seven were delivered successfully and the ledger
+  retains both FluidCalendar and Google external event IDs.
+- An immediate repeat scan claimed zero deliveries, confirming local
+  idempotency. The long-running `hcgateway_calendar_worker` container is active;
+  historical backfill remains explicitly disabled.
 
 ## Analytics behavior worth preserving
 
@@ -199,12 +227,14 @@ uses it.
 
 ## Verification already performed
 
-The current image passes 54 tests covering pipeline, Recovery, and strain behavior,
+The current image passes 71 tests covering pipeline, Recovery, and strain behavior,
 fingerprints (including HRV), sleep quality selection and cross-date
 reconciliation, prepared sleep reads, MongoDB idempotency, stale-worker and
-per-revision retry safety, bearer
-authentication, user isolation, endpoint shape, day shaping, sync activity,
-configuration validation, daily date ranges, and device-provenance inventory:
+per-revision retry safety, deterministic calendar rendering, FluidCalendar HTTP
+classification, durable delivery leases/retries, backward backfill cursors,
+calendar-worker orchestration, bearer authentication, user isolation, endpoint
+shape, day shaping, sync activity, configuration validation, daily date ranges,
+and device-provenance inventory:
 
 ```bash
 docker exec hcgateway_api sh -lc \
@@ -226,6 +256,7 @@ Useful checks:
 ```bash
 docker compose ps
 docker compose logs -f analytics-worker
+docker compose logs -f calendar-worker
 curl http://localhost:6644/health
 ```
 
@@ -289,7 +320,7 @@ are ignored. Never commit or print their secret values.
 ## Recommended next session
 
 1. Read this file and `doc/frontend-data-model.md`, then run `git status`,
-   `docker compose ps`, and the 54-test command above.
+   `docker compose ps`, and the 71-test command above.
 2. Set the primary user's real `homeTimeZone`, desired sleep target, and
    optional birth date through `PUT /api/v2/analytics/config`; do not guess
    personal configuration.
@@ -311,6 +342,9 @@ are ignored. Never commit or print their secret values.
 7. Once the frontend works end-to-end, consider exposing paginated prepared
    sleep events/device comparisons and expanding the Python port to additional
    raw signals. Keep raw records as the immutable source of truth.
+8. Observe ongoing recent-window FluidCalendar delivery. When ready to export
+   older history, set `CALENDAR_SLEEP_BACKFILL_ENABLED=true` and monitor one
+   bounded backward batch before leaving gradual backfill enabled.
 
 Before any model or UI describes a healthspan value, label it experimental and
 non-clinical. There is not enough information here to claim an actual predicted

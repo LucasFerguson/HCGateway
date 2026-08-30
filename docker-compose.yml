@@ -34,6 +34,31 @@ services:
       db:
         condition: service_healthy
 
+  calendar-worker:
+    build:
+      context: ./api
+    image: hcgateway-api:local
+    command: ["python", "-m", "analytics_engine.calendar_worker"]
+    env_file:
+      - ./api/.env
+    environment:
+      # Keep the calendar credential in the root Compose .env so it is exposed
+      # only to this service, not to the API or analytics worker.
+      FLUIDCALENDAR_API_KEY: ${FLUIDCALENDAR_API_KEY:?Set FLUIDCALENDAR_API_KEY in the root .env file}
+      FLUIDCALENDAR_BASE_URL: ${FLUIDCALENDAR_BASE_URL:?Set FLUIDCALENDAR_BASE_URL in the root .env file}
+      CALENDAR_SLEEP_USER_ID: ${CALENDAR_SLEEP_USER_ID:?Set CALENDAR_SLEEP_USER_ID in the root .env file}
+      CALENDAR_SLEEP_FEED_ID: ${CALENDAR_SLEEP_FEED_ID:-e50d0983-a930-40a2-a603-3336a8aab552}
+      CALENDAR_SLEEP_INITIAL_LOOKBACK_DAYS: ${CALENDAR_SLEEP_INITIAL_LOOKBACK_DAYS:-7}
+      CALENDAR_SLEEP_POLL_SECONDS: ${CALENDAR_SLEEP_POLL_SECONDS:-300}
+      CALENDAR_SLEEP_BACKFILL_ENABLED: ${CALENDAR_SLEEP_BACKFILL_ENABLED:-false}
+      CALENDAR_SLEEP_BACKFILL_BATCH_DAYS: ${CALENDAR_SLEEP_BACKFILL_BATCH_DAYS:-7}
+      CALENDAR_SLEEP_BACKFILL_INTERVAL_SECONDS: ${CALENDAR_SLEEP_BACKFILL_INTERVAL_SECONDS:-86400}
+    container_name: hcgateway_calendar_worker
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+
   db:
     # Current MongoDB builds refuse this host's affected 7.0.2 kernel. Pin the
     # previously deployed image and re-enable glibc rseq to avoid the TCMalloc
