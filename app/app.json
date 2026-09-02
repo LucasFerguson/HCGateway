@@ -6,6 +6,12 @@
     "plugins": [
       "expo-health-connect",
       [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {

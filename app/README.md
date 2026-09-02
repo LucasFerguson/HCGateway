@@ -109,9 +109,16 @@ reliable, private, and maintainable.
   has been uploaded, source/device provenance, retention behavior, and links to
   delete a type/date range on the server and revoke local permissions.
 
-- [ ] **Move access and refresh tokens out of plain AsyncStorage.** Use Android
-  Keystore-backed secure storage, rotate tokens safely, clear credentials on
-  logout/revoke, and never include tokens in backups.
+- [x] **Move access and refresh tokens out of plain AsyncStorage.** Access and
+  refresh tokens now use Expo SecureStore, backed by Android Keystore. Existing
+  plaintext tokens are migrated once and removed, startup refreshes the saved
+  session before showing the login screen, logout clears both credentials, and
+  Android application backup is disabled so encrypted preferences are not
+  restored without their device-bound key. Server-side refresh-token rotation
+  remains a separate API design improvement. The bearer access token still
+  expires after 12 hours; the saved refresh token has no time-based expiry and
+  transparently obtains a new access token after the app has been closed for
+  days or months.
 
 - [ ] **Remove sensitive console logging.** Do not print FCM tokens, auth
   responses, raw records, record IDs, or rejected payload contents in release
@@ -131,6 +138,11 @@ reliable, private, and maintainable.
   redact health/auth data and provide an obvious in-app consent and disable path.
 
 ## User experience and operations
+
+- [x] **Use explicit start and end pickers for custom sync ranges.** Each field
+  now opens a single-date calendar, the end cannot precede the start, and the
+  selected end date includes the full local day rather than stopping at local
+  midnight.
 
 - [ ] **Redesign onboarding as a readiness checklist.** Verify Health Connect
   availability, server reachability, authentication, core permissions, optional

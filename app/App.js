@@ -10,6 +10,7 @@ import {
   getGrantedPermissions,
 } from 'react-native-health-connect';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import Toast from 'react-native-toast-message';
 import axios from 'axios';
 import ReactNativeForegroundService from '@supersami/rn-foreground-service';
@@ -77,7 +78,6 @@ const requestUserPermission = async () => {
   try {
     await messaging().requestPermission();
     const token = await messaging().getToken();
-    console.log('Device Token:', token);
     return token;
   } catch (error) {
     console.log('Permission or Token retrieval error:', error);
@@ -95,6 +95,7 @@ messaging().onMessage(remoteMessage => {
 });
 
 let login;
+let authStateListener = null;
 // let apiBase = 'https://api.hcgateway.shuchir.dev'; // need to change this - Lucas 2025-04-01
 let apiBase = 'http://192.168.8.239:6644/'; // need to change this - Lucas 2025-04-01
 let lastSync = null;
@@ -118,7 +119,57 @@ const PAGE_SIZE = 1000;
 const UPLOAD_BATCH_SIZE = 250;
 const INCREMENTAL_OVERLAP_MS = 10 * 60 * 1000;
 const SYNCED_DAYS_KEY = 'syncedDaysByType';
+const ACCESS_TOKEN_KEY = 'hcgateway.accessToken';
+const REFRESH_TOKEN_KEY = 'hcgateway.refreshToken';
+const TOKEN_EXPIRY_KEY = 'hcgateway.tokenExpiry';
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const setActiveLogin = (token) => {
+  login = token || null;
+  if (authStateListener) authStateListener(login);
+};
+
+const persistAuthSession = async ({ token, refresh, expiry }) => {
+  await Promise.all([
+    SecureStore.setItemAsync(ACCESS_TOKEN_KEY, token),
+    SecureStore.setItemAsync(REFRESH_TOKEN_KEY, refresh),
+    expiry
+      ? SecureStore.setItemAsync(TOKEN_EXPIRY_KEY, expiry)
+      : SecureStore.deleteItemAsync(TOKEN_EXPIRY_KEY),
+  ]);
+  // Remove the old plaintext copies after SecureStore has safely accepted them.
+  await Promise.all([delkey('login'), delkey('refreshToken')]);
+};
+
+const clearAuthSession = async () => {
+  await Promise.all([
+    SecureStore.deleteItemAsync(ACCESS_TOKEN_KEY),
+    SecureStore.deleteItemAsync(REFRESH_TOKEN_KEY),
+    SecureStore.deleteItemAsync(TOKEN_EXPIRY_KEY),
+    delkey('login'),
+    delkey('refreshToken'),
+  ]);
+  setActiveLogin(null);
+};
+
+const loadAuthSession = async () => {
+  let [token, refresh, expiry] = await Promise.all([
+    SecureStore.getItemAsync(ACCESS_TOKEN_KEY),
+    SecureStore.getItemAsync(REFRESH_TOKEN_KEY),
+    SecureStore.getItemAsync(TOKEN_EXPIRY_KEY),
+  ]);
+
+  // One-time migration for users upgrading from AsyncStorage token storage.
+  if (!token || !refresh) {
+    const [legacyToken, legacyRefresh] = await Promise.all([get('login'), get('refreshToken')]);
+    token = token || legacyToken;
+    refresh = refresh || legacyRefresh;
+    if (token && refresh) {
+      await persistAuthSession({ token, refresh, expiry });
+    }
+  }
+  return { token, refresh, expiry };
+};
 
 const HEALTH_HISTORY_PERMISSION = 'android.permission.health.READ_HEALTH_DATA_HISTORY';
 const HEALTH_BACKGROUND_PERMISSION = 'android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND';
@@ -210,37 +261,6 @@ const setTypeStatus = (type, patch) => {
   notifySyncStatus();
 };
 
-Toast.show({
-  type: 'info',
-  text1: "Loading API Base URL...",
-  autoHide: false
-})
-get('apiBase')
-  .then(res => {
-    if (res) {
-      apiBase = res;
-      Toast.hide();
-      Toast.show({
-        type: "success",
-        text1: "API Base URL loaded",
-      })
-    }
-    else {
-      Toast.hide();
-      Toast.show({
-        type: "error",
-        text1: "API Base URL not found. Using default server.",
-      })
-    }
-  })
-
-get('login')
-  .then(res => {
-    if (res) {
-      login = res;
-    }
-  })
-
 get('lastSync')
   .then(res => {
     if (res) {
@@ -330,42 +350,49 @@ const askForPermissions = async () => {
   }
 };
 
-const refreshTokenFunc = async () => {
-  let refreshToken = await get('refreshToken');
-  if (!refreshToken) return;
+const refreshTokenFunc = async ({ refreshToken: suppliedRefreshToken, showToast = false } = {}) => {
+  const refreshToken = suppliedRefreshToken || await SecureStore.getItemAsync(REFRESH_TOKEN_KEY);
+  if (!refreshToken) return null;
   try {
     let response = await axios.post(`${apiBase}/api/v2/refresh`, {
       refresh: refreshToken
+    }, {
+      timeout: 10000,
     });
     if ('token' in response.data) {
-      console.log(response.data);
-      await setPlain('login', response.data.token)
-      login = response.data.token;
-      await setPlain('refreshToken', response.data.refresh);
-      Toast.show({
-        type: 'success',
-        text1: "Token refreshed successfully",
-      })
+      await persistAuthSession(response.data);
+      setActiveLogin(response.data.token);
+      if (showToast) {
+        Toast.show({
+          type: 'success',
+          text1: "Session refreshed",
+        });
+      }
+      return response.data.token;
     }
-    else {
+    if (showToast) {
       Toast.show({
         type: 'error',
-        text1: "Token refresh failed",
+        text1: "Session refresh failed",
         text2: response.data.error
-      })
-      login = null;
-      delkey('login');
+      });
     }
+    return null;
   }
-
   catch (err) {
-    Toast.show({
-      type: 'error',
-      text1: "Token refresh failed",
-      text2: err.message
-    })
-    login = null;
-    delkey('login');
+    const invalidRefresh = err.response && (err.response.status === 401 || err.response.status === 403);
+    if (invalidRefresh) {
+      await clearAuthSession();
+    }
+    if (showToast) {
+      Toast.show({
+        type: 'error',
+        text1: invalidRefresh ? "Session expired" : "Session refresh unavailable",
+        text2: invalidRefresh ? "Please log in again." : err.message
+      });
+    }
+    // A temporary network failure must not erase an otherwise usable session.
+    return null;
   }
 }
 
@@ -913,12 +940,15 @@ const handleDel = async (message) => {
 
 export default Sentry.wrap(function App() {
   const [, forceUpdate] = React.useReducer(x => x + 1, 0);
-  const [form, setForm] = React.useState(null);
+  const [form, setForm] = React.useState({});
+  const [authToken, setAuthToken] = React.useState(null);
+  const [authReady, setAuthReady] = React.useState(false);
   const [showSyncWarning, setShowSyncWarning] = React.useState(false);
-  const [customStartDate, setcustomStartDate] = React.useState(new Date());
-  const [customEndDate, setcustomEndDate] = React.useState(new Date());
+  const [customStartDate, setCustomStartDate] = React.useState(new Date());
+  const [customEndDate, setCustomEndDate] = React.useState(new Date());
   const [useCustomDates, setUseCustomDates] = React.useState(false);
   const [showDatePickerModal, setShowDatePickerModal] = React.useState(false);
+  const [datePickerTarget, setDatePickerTarget] = React.useState('start');
   const defaultCalStyles = useDefaultStyles();
   const [syncStatusView, setSyncStatusView] = React.useState(syncStatus);
   const [forceResyncView, setForceResyncView] = React.useState(forceResyncSyncedDays);
@@ -934,7 +964,11 @@ export default Sentry.wrap(function App() {
       setSyncedDaysView({ ...syncedDaysByType });
       setInventoryView(syncInventory ? { ...syncInventory } : null);
     };
-    return () => { if (syncStatusListener) syncStatusListener = null; };
+    authStateListener = setAuthToken;
+    return () => {
+      if (syncStatusListener) syncStatusListener = null;
+      if (authStateListener) authStateListener = null;
+    };
   }, [])
 
   React.useEffect(() => {
@@ -958,14 +992,10 @@ export default Sentry.wrap(function App() {
 
     try {
       let fcmToken = await requestUserPermission();
-      form.fcmToken = fcmToken;
-      let response = await axios.post(`${apiBase}/api/v2/login`, form);
+      let response = await axios.post(`${apiBase}/api/v2/login`, { ...form, fcmToken });
       if ('token' in response.data) {
-        console.log(response.data);
-        await setPlain('login', response.data.token);
-        login = response.data.token;
-        await setPlain('refreshToken', response.data.refresh);
-        forceUpdate();
+        await persistAuthSession(response.data);
+        setActiveLogin(response.data.token);
         Toast.hide();
         Toast.show({
           type: 'success',
@@ -994,66 +1024,94 @@ export default Sentry.wrap(function App() {
   }
 
   React.useEffect(() => {
-    requestNotifications(['alert']).then(({ status, settings }) => {
-      console.log(status, settings)
-    });
-
-    get('login')
-      .then(res => {
-        if (res) {
-          login = res;
-          get('taskDelay')
-            .then(res => {
-              if (res) taskDelay = Number(res);
-            })
-
-          if (!foregroundTasksRegistered) {
-            ReactNativeForegroundService.add_task(() => sync(), {
-              delay: taskDelay,
-              onLoop: true,
-              taskId: 'hcgateway_sync',
-              onError: e => console.log(`Error logging:`, e),
-            });
-
-            ReactNativeForegroundService.add_task(() => refreshTokenFunc(), {
-              delay: 10800 * 1000,
-              onLoop: true,
-              taskId: 'refresh_token',
-              onError: e => console.log(`Error logging:`, e),
-            });
-
-            foregroundTasksRegistered = true;
-          }
-
-          ReactNativeForegroundService.start({
-            id: 1244,
-            title: 'HCGateway Sync Service',
-            message: 'HCGateway is working in the background to sync your data.',
-            icon: 'ic_launcher',
-            setOnlyAlertOnce: true,
-            color: '#000000',
-          }).then(() => console.log('Foreground service started'));
-
-          forceUpdate()
+    let cancelled = false;
+    const restoreSession = async () => {
+      try {
+        const savedApiBase = await get('apiBase');
+        if (savedApiBase) apiBase = savedApiBase;
+        const session = await loadAuthSession();
+        if (session.token) setActiveLogin(session.token);
+        if (session.refresh) {
+          await refreshTokenFunc({ refreshToken: session.refresh });
         }
-      })
-  }, [login])
+      } catch (err) {
+        console.log('Failed to restore saved session', err);
+      } finally {
+        if (!cancelled) setAuthReady(true);
+      }
+    };
+    requestNotifications(['alert']).catch(err => console.log('Notification permission request failed', err));
+    restoreSession();
+    return () => { cancelled = true; };
+  }, [])
 
-  const formatDateToISOString = (date) => {
+  React.useEffect(() => {
+    if (!authReady || !authToken) return;
+    const startForegroundTasks = async () => {
+      const savedTaskDelay = await get('taskDelay');
+      if (savedTaskDelay) taskDelay = Number(savedTaskDelay);
+
+      if (!foregroundTasksRegistered) {
+        ReactNativeForegroundService.add_task(() => sync(), {
+          delay: taskDelay,
+          onLoop: true,
+          taskId: 'hcgateway_sync',
+          onError: e => console.log(`Sync task error:`, e),
+        });
+
+        ReactNativeForegroundService.add_task(() => refreshTokenFunc(), {
+          delay: 10800 * 1000,
+          onLoop: true,
+          taskId: 'refresh_token',
+          onError: e => console.log(`Token refresh task error:`, e),
+        });
+        foregroundTasksRegistered = true;
+      }
+
+      ReactNativeForegroundService.start({
+        id: 1244,
+        title: 'HCGateway Sync Service',
+        message: 'HCGateway is working in the background to sync your data.',
+        icon: 'ic_launcher',
+        setOnlyAlertOnce: true,
+        color: '#000000',
+      }).then(() => console.log('Foreground service started'));
+    };
+    startForegroundTasks().catch(err => console.log('Failed to start foreground tasks', err));
+  }, [authReady, authToken])
+
+  const formatDateToISOString = (date, endOfDay = false) => {
     if (!date) return null;
-    const midnightDate = new Date(date);
-    midnightDate.setHours(0, 0, 0, 0);
-    return midnightDate.toISOString();
+    const selectedDate = new Date(date);
+    if (endOfDay) {
+      selectedDate.setHours(23, 59, 59, 999);
+      return new Date(Math.min(selectedDate.getTime(), Date.now())).toISOString();
+    }
+    selectedDate.setHours(0, 0, 0, 0);
+    return selectedDate.toISOString();
   };
 
   const formatDateToReadable = (date) => {
     if (!date) return 'Not selected';
-    return date.toLocaleDateString();
+    return new Date(date).toLocaleDateString();
   };
+
+  const openDatePicker = (target) => {
+    setDatePickerTarget(target);
+    setShowDatePickerModal(true);
+  };
+
+  const customDateRangeIsValid = customStartDate && customEndDate
+    && new Date(customStartDate).getTime() <= new Date(customEndDate).getTime();
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.screenContent} keyboardShouldPersistTaps="handled">
-      {login &&
+      {!authReady &&
+        <View style={styles.panel}>
+          <Text style={{ fontSize: 18, textAlign: 'center', marginVertical: 20 }}>Restoring your saved session...</Text>
+        </View>
+      }
+      {authReady && authToken &&
         <View style={styles.panel}>
           <Text style={{ fontSize: 20, marginVertical: 10 }}>You are currently logged in.</Text>
           <Text style={{ fontSize: 17, marginVertical: 10 }}>Last successful sync: {lastSuccessfulSyncAt || lastSync || 'Never'}</Text>
@@ -1354,16 +1412,23 @@ export default Sentry.wrap(function App() {
 
           <View style={{ marginTop: 10, marginBottom: 5 }}>
             <Text style={{ fontSize: 15, marginBottom: 5 }}>Sync Range:</Text>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text>
-                {customStartDate ? formatDateToReadable(customStartDate) : 'Not set'} -
-                {customEndDate ? formatDateToReadable(customEndDate) : 'Not set'}
-              </Text>
-              <Button
-                title="Select Dates"
-                onPress={() => setShowDatePickerModal(true)}
-              />
+            <View style={styles.dateRangeRow}>
+              <View style={styles.dateRangeField}>
+                <Text style={styles.dateRangeLabel}>Start date</Text>
+                <Button
+                  title={formatDateToReadable(customStartDate)}
+                  onPress={() => openDatePicker('start')}
+                />
+              </View>
+              <View style={styles.dateRangeField}>
+                <Text style={styles.dateRangeLabel}>End date</Text>
+                <Button
+                  title={formatDateToReadable(customEndDate)}
+                  onPress={() => openDatePicker('end')}
+                />
+              </View>
             </View>
+            {!customDateRangeIsValid && <Text style={styles.errorText}>End date must be on or after the start date.</Text>}
           </View>
 
           <Modal
@@ -1374,34 +1439,32 @@ export default Sentry.wrap(function App() {
           >
             <View style={styles.modalOverlay}>
               <View style={styles.modalContent}>
-                <Text style={styles.modalTitle}>Select Date Range</Text>
+                <Text style={styles.modalTitle}>Select {datePickerTarget === 'start' ? 'Start' : 'End'} Date</Text>
 
                 <DateTimePicker
-                  mode="range"
+                  mode="single"
+                  date={datePickerTarget === 'start' ? customStartDate : customEndDate}
+                  minDate={datePickerTarget === 'end' ? customStartDate : undefined}
                   maxDate={new Date()}
-                  startDate={customStartDate}
-                  endDate={customEndDate}
-                  onChange={(...dates) => {
+                  onChange={({ date }) => {
+                    if (!date) return;
+                    const selected = date && typeof date.toDate === 'function' ? date.toDate() : new Date(date);
                     setUseCustomDates(true);
-                    if (dates[0].startDate) setcustomStartDate(dates[0].startDate);
-                    if (dates[0].endDate) setcustomEndDate(dates[0].endDate);
+                    if (datePickerTarget === 'start') {
+                      setCustomStartDate(selected);
+                      if (selected.getTime() > new Date(customEndDate).getTime()) {
+                        setCustomEndDate(selected);
+                      }
+                    } else {
+                      setCustomEndDate(selected);
+                    }
+                    setShowDatePickerModal(false);
                   }}
                   styles={defaultCalStyles}
                 />
 
                 <View style={styles.modalButtons}>
-                  <Button
-                    title="Cancel"
-                    onPress={() => setShowDatePickerModal(false)}
-                    color="darkgrey"
-                  />
-                  <Button
-                    title="Apply"
-                    onPress={() => {
-                      setUseCustomDates(true);
-                      setShowDatePickerModal(false);
-                    }}
-                  />
+                  <Button title="Cancel" onPress={() => setShowDatePickerModal(false)} color="darkgrey" />
                 </View>
               </View>
             </View>
@@ -1410,13 +1473,13 @@ export default Sentry.wrap(function App() {
           <View style={{ marginTop: 10, marginBottom: 10 }}>
             <Button
               title={useCustomDates ? "Sync Selected Range" : "Sync Now (Default)"}
-              disabled={syncStatusView.running}
+              disabled={syncStatusView.running || (useCustomDates && !customDateRangeIsValid)}
               onPress={() => {
                 if (!useCustomDates) {
                   sync();
                 }
                 else if (customStartDate && customEndDate) {
-                  sync(formatDateToISOString(customStartDate), formatDateToISOString(customEndDate));
+                  sync(formatDateToISOString(customStartDate), formatDateToISOString(customEndDate, true));
                 }
               }}
             />
@@ -1425,21 +1488,19 @@ export default Sentry.wrap(function App() {
           <View style={{ marginTop: 20 }}>
             <Button
               title="Logout"
-              onPress={() => {
-                delkey('login');
-                login = null;
+              onPress={async () => {
+                await clearAuthSession();
                 Toast.show({
                   type: 'success',
                   text1: "Logged out successfully",
                 })
-                forceUpdate();
               }}
               color={'darkred'}
             />
           </View>
         </View>
       }
-      {!login &&
+      {authReady && !authToken &&
         <View style={styles.panel}>
           <Text style={{
             fontSize: 30,
@@ -1589,6 +1650,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-around',
     marginTop: 15,
+  },
+
+  dateRangeRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+
+  dateRangeField: {
+    flex: 1,
+  },
+
+  dateRangeLabel: {
+    fontSize: 12,
+    color: '#555',
+    marginBottom: 4,
   },
 
   statusPanel: {

@@ -2,6 +2,20 @@
 
 Last updated: 2026-08-29
 
+### Android session and date-range checkpoint (2026-09-02)
+
+- Android access and refresh tokens are now stored with Expo SecureStore
+  (Android Keystore-backed) instead of AsyncStorage. Existing installations
+  migrate their saved plaintext credentials once, and logout clears both the
+  secure values and any legacy copies.
+- App startup restores the saved access token and proactively uses the refresh
+  token before deciding whether login is required. Temporary network failures
+  retain the local session; an explicit invalid-token response clears it.
+- Custom sync ranges now use separate single-date start and end pickers. The
+  end date cannot precede the start, and sync includes the selected end day.
+- This change adds `expo-secure-store`; rebuild the Android application before
+  on-device verification because it includes a native module.
+
 This document is the starting point for the next coding session. The completed
 implementation is documented in detail in
 [`frontend-data-model.md`](frontend-data-model.md); this file records current
