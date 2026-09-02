@@ -4,6 +4,8 @@ Last updated: 2026-08-29
 
 ### Android session and date-range checkpoint (2026-09-02)
 
+- The Android/Expo application release is now `2.2.2` with Android
+  `versionCode` 2, synchronized across native, Expo, and package metadata.
 - Android access and refresh tokens are now stored with Expo SecureStore
   (Android Keystore-backed) instead of AsyncStorage. Existing installations
   migrate their saved plaintext credentials once, and logout clears both the
