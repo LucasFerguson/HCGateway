@@ -54,6 +54,16 @@ Read `doc/session-handoff.md` before making broad changes and use
   and `doc/session-handoff.md` for meaningful operational checkpoints.
 - Keep response changes additive when practical. Version deliberate contract
   breaks instead of silently changing existing meanings.
+- A separate read-only GraphQL API lives in `graphql-api/` (Node.js +
+  TypeScript, Apollo Server, its own container/Dockerfile/`MONGO_URI`, port
+  6645) - see `doc/graphql-api.md`. It is a thin passthrough over the same
+  MongoDB data the Python services write: no health-domain logic (sleep
+  reconciliation, timezone rendering, missing-data derivation, bucketing)
+  is implemented there. If a GraphQL field needs real computation beyond
+  reading and reshaping a stored field, add it to the Python analytics
+  pipeline first, then expose it - never compute it fresh in Node. Its
+  tests live under `graphql-api/src/__tests__/` (Vitest) and are separate
+  from the Python `python -m unittest discover` suite.
 
 ## Verification and operations
 

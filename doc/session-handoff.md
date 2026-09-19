@@ -2,6 +2,57 @@
 
 Last updated: 2026-09-19
 
+## 2026-09-19 — Milestone: read-only GraphQL API implemented
+
+`graphql-api/` (Node.js + TypeScript, Apollo Server) now exists as a fifth
+Compose service, port 6645, alongside `api`, `analytics-worker`,
+`calendar-worker`, and `db`. It is a thin, read-only passthrough over the
+same MongoDB instance - own `MONGO_URI`, no HTTP hop through Flask, no
+mutations, no health-domain logic reimplemented in Node. Auth independently
+validates the bearer token against `hcgateway.users` (mirroring Flask's
+`before_request` hook) before any resolver runs; every field is scoped to
+`hcgateway_<userId>` derived from that token, never from a query argument.
+See `doc/graphql-api.md` for the endpoint, root schema shape, and safety
+model (resolver timeout, response-size cap, depth/alias/complexity limits -
+all env-configurable), and `doc/graphql-schema-design.md`/
+`doc/graphql-read-api-audit.md` for the design this was built from.
+
+Verified end-to-end against the real primary account (`lucas`) through
+`docker compose up -d --build`: all five services report healthy, an
+unauthenticated query is rejected before any resolver executes, a
+mismatched user/token cannot see another account's data, and missing health
+values consistently render as an explicit `MetricStatus` with `value: null`
+- never a numeric zero. The existing 79-test Python suite still passes
+unchanged; a new, separate 12-test Vitest suite
+(`graphql-api/src/__tests__/`, run via `npm test` inside `graphql-api/`,
+using `mongodb-memory-server` rather than the live database) covers tenant
+isolation, missing-data representation, and the depth/alias/complexity
+limiter rejecting a pathological query.
+
+Real data diverged from `doc/graphql-schema-design.md`'s hypothesis in a
+few places, each handled by following the real shape rather than forcing it
+into the doc (per the doc's own "how literally to take this" instructions):
+the `MetricStatus` enum needed two more real values (`UNAVAILABLE`,
+`SAMPLE_TIME_ONLY`) beyond the six originally proposed; `Analytics.day()`
+for a date with no prepared data now synthesizes the same fully-shaped
+"empty day" `day_dashboard.py`'s `empty_day()` produces, rather than
+returning `null`; and `@defer` is declared on fragments/inline-fragments
+(its only valid SDL locations) rather than on field definitions as the
+design doc's SDL literally showed, since `@defer` is a query-side directive
+in the GraphQL spec, not a schema one.
+
+Two things were deliberately left as gaps rather than worked around: (1)
+`@defer`/incremental delivery is schema-ready but not yet functionally
+streaming, because no released `@apollo/server` version (checked stable,
+rc, and alpha/next-v3 tags) has a peer dependency range that includes
+graphql-js 17's now-stable incremental execution - it's pinned to
+`graphql ^16.x` everywhere, and Apollo's own polyfill only activates real
+streaming on the exact alpha build `17.0.0-alpha.9`. (2)
+`StrainSummary.workouts` returns `[]` because per-workout strain detail is
+computed in-memory during a pipeline run but never persisted to any
+`_analytics_*` collection - there is nothing for a read-only service to
+read back without a Python-side storage change first.
+
 ## 2026-09-19 — Milestone: the database went unencrypted
 
 This was a major structural turning point for the project. Every health record

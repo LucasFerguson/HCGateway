@@ -3,7 +3,12 @@ openapi: 3.0.0
 info:
   version: 2.2.0
   title: HCGateway
-  description: ''
+  description: >
+    This document covers the REST v2 API only. A separate read-only GraphQL
+    API also exists for prepared analytics and raw Health Connect records -
+    see doc/graphql-api.md. It runs as its own service (default port 6645)
+    and is not represented in this OpenAPI document, which describes REST
+    paths only.
 servers:
 - url: https://api.hcgateway.shuchir.dev
 paths:

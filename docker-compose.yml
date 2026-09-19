@@ -59,6 +59,25 @@ services:
       db:
         condition: service_healthy
 
+  graphql-api:
+    build:
+      context: ./graphql-api
+    image: hcgateway-graphql-api:local
+    ports:
+      - "6645:6645"
+    env_file:
+      - ./graphql-api/.env
+    container_name: hcgateway_graphql_api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:6645/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
   db:
     # Current MongoDB builds refuse this host's affected 7.0.2 kernel. Pin the
     # previously deployed image and re-enable glibc rseq to avoid the TCMalloc
