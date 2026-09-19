@@ -31,8 +31,8 @@ For the current implementation checkpoint and recommended next work, start with
   creation below its 500 MiB free-space minimum. The Proxmox VM disk was
   expanded that day; the guest now has roughly 15.7 GB free and all 71 tests
   pass again. Add monitoring or an operational threshold that warns well before
-  writes are blocked. The exact incident and leftover test-only artifacts are
-  recorded in [doc/session-handoff.md](doc/session-handoff.md).
+  writes are blocked. The exact incident and seven remaining test-only
+  databases are recorded in [doc/session-handoff.md](doc/session-handoff.md).
 
 - [ ] **Review `/revoke` HTTP-method discrepancy.** The API docs
   ([doc/api-documentation.yml](doc/api-documentation.yml)) document

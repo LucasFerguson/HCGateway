@@ -16,10 +16,12 @@ Last updated: 2026-09-19
   storage was then expanded; the guest now sees about 47.4 GB total with
   15.7 GB available (66% used). The complete 71-test suite subsequently passed
   in 1.805 seconds.
-- The failed API-test setup left 14 UUID-named temporary `test-api-*` users and
-  seven `hcgateway_test-api-*` databases because `setUp` failed before teardown.
-  They contain test fixtures, not health data. Do not use a broad database
-  deletion: re-check the prefixes and remove only those test artifacts.
+- The failed API-test setup initially left 14 UUID-named temporary `test-api-*`
+  users and seven `hcgateway_test-api-*` databases because `setUp` failed before
+  teardown. The 14 users were deleted on 2026-09-19 after exact ID/username
+  validation. The seven test databases remain intentionally untouched because
+  only user deletion was authorized. They contain test fixtures, not health
+  data; re-check the exact prefix before any later targeted removal.
 - The local MongoDB bind mount was about 4.645 GB at this audit. The VM expansion
   restored healthy headroom without deleting MongoDB data, Docker assets, or
   raw health exports. Capacity monitoring is still recommended so the database
@@ -374,10 +376,10 @@ are ignored. Never commit or print their secret values.
 
 1. Read this file and `doc/frontend-data-model.md`, then run `git status` and
    `docker compose ps`.
-2. Re-check and remove only the leaked `test-api-*` users and
-   `hcgateway_test-api-*` databases from the failed 2026-09-19 test setup, then
-   confirm the full 71-test command remains green. Do not use a broad database
-   deletion pattern.
+2. Decide whether to remove the seven remaining `hcgateway_test-api-*`
+   databases from the failed 2026-09-19 test setup. Re-check the exact prefix
+   first and do not use a broad database deletion pattern. The leaked users are
+   already gone.
 3. Rebuild Android because `expo-secure-store` is a native dependency, then
    validate upgrade migration from plaintext credentials, cold-start refresh
    after access-token expiry, logout clearing, temporary-network behavior, and
