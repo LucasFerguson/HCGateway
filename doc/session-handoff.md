@@ -1,6 +1,32 @@
 # Session handoff: analytics backend
 
-Last updated: 2026-08-29
+Last updated: 2026-09-19
+
+### Session-closing audit (2026-09-19)
+
+- No source commits were added after the Android `2.2.2` release metadata
+  checkpoint on 2026-09-02. Local `main` matches `origin/main` at `55a8c54`.
+- All four Compose services are running; the API and MongoDB report healthy.
+  Analytics continued completing runs through 2026-09-19, and the calendar
+  worker continues its five-minute recent-window scans.
+- `node --check app/App.js` passes. The 71-test Python suite was attempted but
+  could not complete because the root filesystem is 99% full: about 468 MB
+  (447 MiB) remained, below MongoDB's 500 MiB minimum for creating indexes.
+  The result was 59 passes and 12 `OutOfDiskSpace` setup errors, with no test
+  assertion failures.
+- The failed API-test setup left 14 UUID-named temporary `test-api-*` users and
+  seven `hcgateway_test-api-*` databases because `setUp` failed before teardown.
+  They contain test fixtures, not health data. Do not use a broad database
+  deletion: after space is recovered, re-check the prefixes and remove only
+  those test artifacts.
+- The local MongoDB bind mount is about 4.645 GB. Docker reports about 5.089 GB
+  of reclaimable build cache, making verified unused build-cache cleanup the
+  likely first capacity-recovery option. Do not remove MongoDB files, volumes,
+  images used by running services, or raw health exports to make room.
+- `.vscode/` and `doc/external/` remain untracked. The latter contains copied
+  FluidCalendar reference material used during integration work. They were not
+  reviewed for redistribution or added to Git; decide their disposition
+  explicitly rather than committing them incidentally.
 
 ### Android session and date-range checkpoint (2026-09-02)
 
@@ -243,7 +269,7 @@ uses it.
 
 ## Verification already performed
 
-The current image passes 71 tests covering pipeline, Recovery, and strain behavior,
+The current image previously passed 71 tests covering pipeline, Recovery, and strain behavior,
 fingerprints (including HRV), sleep quality selection and cross-date
 reconciliation, prepared sleep reads, MongoDB idempotency, stale-worker and
 per-revision retry safety, deterministic calendar rendering, FluidCalendar HTTP
@@ -256,6 +282,10 @@ and device-provenance inventory:
 docker exec hcgateway_api sh -lc \
   'TEST_MONGO_URI="$MONGO_URI" python -m unittest discover -s tests -v'
 ```
+
+The 2026-09-19 closing run was blocked by host disk capacity as documented at
+the top of this file. Recover space and rerun the command before treating the
+suite as currently green.
 
 A full lifecycle test was also completed:
 
@@ -295,14 +325,19 @@ repeat the lifecycle and test-suite checks.
 
 ## Git checkpoint
 
-The analytics work was committed locally, then the other-device Android sync
-commit was fetched from `origin/main` and merged without conflicts. At this
-checkpoint local `main` is ahead of `origin/main` by the analytics commits plus
-the merge commit; it has not yet been pushed.
+The analytics work and subsequent Android/calendar changes are committed and
+present on `origin/main`. At the 2026-09-19 audit, local `main` and
+`origin/main` both point to `55a8c54`.
 
 Recent commits are:
 
 ```text
+55a8c54 chore(android): bump app version to 2.2.2
+2a6d483 feat(android): persist sessions and fix date selection
+f9c6773 add FluidCalendar sleep export worker
+0bcfcd3 refactor sleep analytics reconciliation and time handling
+5dfbc88 docs: note raw exports may be unused
+764730a docs: refresh session handoff checkpoint
 18e90d3 chore: organize local raw health exports
 2a0cfb9 docs(android): add application completion roadmap
 c095f49 docs: compare WHOOP and Pixel health data sources
@@ -335,30 +370,38 @@ are ignored. Never commit or print their secret values.
 
 ## Recommended next session
 
-1. Read this file and `doc/frontend-data-model.md`, then run `git status`,
-   `docker compose ps`, and the 71-test command above.
-2. Set the primary user's real `homeTimeZone`, desired sleep target, and
+1. Read this file and `doc/frontend-data-model.md`, then run `git status` and
+   `docker compose ps`. Recover several GiB of host space using a verified,
+   non-database target; Docker's unused build cache is the leading candidate.
+2. Re-check and remove only the leaked `test-api-*` users and
+   `hcgateway_test-api-*` databases from the failed 2026-09-19 test setup, then
+   rerun the full 71-test command above.
+3. Rebuild Android because `expo-secure-store` is a native dependency, then
+   validate upgrade migration from plaintext credentials, cold-start refresh
+   after access-token expiry, logout clearing, temporary-network behavior, and
+   inclusive custom start/end dates on a physical device.
+4. Set the primary user's real `homeTimeZone`, desired sleep target, and
    optional birth date through `PUT /api/v2/analytics/config`; do not guess
    personal configuration.
-3. Validate the merged Android sync behavior on a physical Android 14+ device:
+5. Validate the merged Android sync behavior on a physical Android 14+ device:
    historical permission, paginated reads, malformed-record isolation, local
    day skipping, forced re-upload/reset, background execution, and inventory UI.
-4. Replace full-history analytics after every upload with incremental processing
+6. Replace full-history analytics after every upload with incremental processing
    of affected dates plus the bounded prior windows needed by Recovery, sleep
    debt, consistency, and healthspan. Preserve immutable run/pointer safety.
-5. Add Health Connect `heartRateVariabilityRmssd` to the Android permission/read
+7. Add Health Connect `heartRateVariabilityRmssd` to the Android permission/read
    list and verify its actual payload shape. Until HRV arrives, Recovery must
    remain visibly `partial`; do not promote the current heuristic to validated.
-6. Finish the in-progress frontend migration in
+8. Finish the in-progress frontend migration in
    `/root/health-connect-dashboard-for-fitbit`: use `/api/v2/analytics/day` for
    the day screen, treat the backend timezone and sleep end-date assignment as
    authoritative, render metric statuses/notes, and use `/api/v2/sync/status`
    for the ingestion indicator. That repository was intentionally read-only in
    the backend task, so get explicit authorization before changing it.
-7. Once the frontend works end-to-end, consider exposing paginated prepared
+9. Once the frontend works end-to-end, consider exposing paginated prepared
    sleep events/device comparisons and expanding the Python port to additional
    raw signals. Keep raw records as the immutable source of truth.
-8. Observe ongoing recent-window FluidCalendar delivery. When ready to export
+10. Observe ongoing recent-window FluidCalendar delivery. When ready to export
    older history, set `CALENDAR_SLEEP_BACKFILL_ENABLED=true` and monitor one
    bounded backward batch before leaving gradual backfill enabled.
 

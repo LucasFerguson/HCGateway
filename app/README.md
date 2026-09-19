@@ -120,6 +120,11 @@ reliable, private, and maintainable.
   transparently obtains a new access token after the app has been closed for
   days or months.
 
+- [ ] **Harden the server refresh-token lifecycle.** Add explicit refresh-token
+  expiry, rotation with reuse protection, per-device/session revocation, and a
+  documented response contract that lets the Android client distinguish an
+  expired/revoked session from a temporary server or network failure.
+
 - [ ] **Remove sensitive console logging.** Do not print FCM tokens, auth
   responses, raw records, record IDs, or rejected payload contents in release
   builds. Add structured redaction for diagnostic logs.
