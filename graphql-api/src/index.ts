@@ -4,6 +4,7 @@ import http from "node:http";
 import cors from "cors";
 import bodyParser from "body-parser";
 import { ApolloServer } from "@apollo/server";
+import { ApolloServerPluginLandingPageLocalDefault } from "@apollo/server/plugin/landingPage/default";
 import { expressMiddleware } from "@as-integrations/express5";
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import { GraphQLError } from "graphql";
@@ -34,11 +35,14 @@ async function main() {
     ],
     plugins: [
       responseSizeCapPlugin(config.responseSizeCapBytes),
-      // Disable the default landing page outside development, per the
-      // design doc's checklist ("Production: GraphiQL/introspection
-      // playground disabled").
+      // Apollo Server's own default landing-page plugin picks Sandbox vs.
+      // the bare "send a POST request" page based on NODE_ENV, independent
+      // of our own config - explicitly select one so GRAPHQL_PLAYGROUND_ENABLED
+      // is the single source of truth regardless of NODE_ENV. Per the design
+      // doc's checklist ("Production: GraphiQL/introspection playground
+      // disabled"), the fully-disabled empty-HTML case stays separate below.
       ...(config.playgroundEnabled
-        ? []
+        ? [ApolloServerPluginLandingPageLocalDefault({ embed: true })]
         : [
             {
               async serverWillStart() {
