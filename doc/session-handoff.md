@@ -5,24 +5,25 @@ Last updated: 2026-09-19
 ### Session-closing audit (2026-09-19)
 
 - No source commits were added after the Android `2.2.2` release metadata
-  checkpoint on 2026-09-02. Local `main` matches `origin/main` at `55a8c54`.
+  checkpoint on 2026-09-02. The source baseline remains `55a8c54`; subsequent
+  local commits are documentation-only and may not yet be pushed.
 - All four Compose services are running; the API and MongoDB report healthy.
   Analytics continued completing runs through 2026-09-19, and the calendar
   worker continues its five-minute recent-window scans.
-- `node --check app/App.js` passes. The 71-test Python suite was attempted but
-  could not complete because the root filesystem is 99% full: about 468 MB
-  (447 MiB) remained, below MongoDB's 500 MiB minimum for creating indexes.
-  The result was 59 passes and 12 `OutOfDiskSpace` setup errors, with no test
-  assertion failures.
+- `node --check app/App.js` passes. The first 71-test Python run failed during
+  setup because the root filesystem was 99% full: about 468 MB (447 MiB)
+  remained, below MongoDB's 500 MiB minimum for creating indexes. Proxmox VM
+  storage was then expanded; the guest now sees about 47.4 GB total with
+  15.7 GB available (66% used). The complete 71-test suite subsequently passed
+  in 1.805 seconds.
 - The failed API-test setup left 14 UUID-named temporary `test-api-*` users and
   seven `hcgateway_test-api-*` databases because `setUp` failed before teardown.
   They contain test fixtures, not health data. Do not use a broad database
-  deletion: after space is recovered, re-check the prefixes and remove only
-  those test artifacts.
-- The local MongoDB bind mount is about 4.645 GB. Docker reports about 5.089 GB
-  of reclaimable build cache, making verified unused build-cache cleanup the
-  likely first capacity-recovery option. Do not remove MongoDB files, volumes,
-  images used by running services, or raw health exports to make room.
+  deletion: re-check the prefixes and remove only those test artifacts.
+- The local MongoDB bind mount was about 4.645 GB at this audit. The VM expansion
+  restored healthy headroom without deleting MongoDB data, Docker assets, or
+  raw health exports. Capacity monitoring is still recommended so the database
+  cannot silently approach its write-safety threshold again.
 - `.vscode/` and `doc/external/` remain untracked. The latter contains copied
   FluidCalendar reference material used during integration work. They were not
   reviewed for redistribution or added to Git; decide their disposition
@@ -269,7 +270,7 @@ uses it.
 
 ## Verification already performed
 
-The current image previously passed 71 tests covering pipeline, Recovery, and strain behavior,
+The current image passes 71 tests covering pipeline, Recovery, and strain behavior,
 fingerprints (including HRV), sleep quality selection and cross-date
 reconciliation, prepared sleep reads, MongoDB idempotency, stale-worker and
 per-revision retry safety, deterministic calendar rendering, FluidCalendar HTTP
@@ -283,9 +284,9 @@ docker exec hcgateway_api sh -lc \
   'TEST_MONGO_URI="$MONGO_URI" python -m unittest discover -s tests -v'
 ```
 
-The 2026-09-19 closing run was blocked by host disk capacity as documented at
-the top of this file. Recover space and rerun the command before treating the
-suite as currently green.
+After the Proxmox VM disk expansion on 2026-09-19, the full suite passed again
+in 1.805 seconds. The earlier capacity failure and its leftover test fixtures
+are documented at the top of this file.
 
 A full lifecycle test was also completed:
 
@@ -325,13 +326,14 @@ repeat the lifecycle and test-suite checks.
 
 ## Git checkpoint
 
-The analytics work and subsequent Android/calendar changes are committed and
-present on `origin/main`. At the 2026-09-19 audit, local `main` and
-`origin/main` both point to `55a8c54`.
+The analytics work and subsequent Android/calendar changes through `55a8c54`
+are committed and present on `origin/main`. Later session-closing documentation
+commits are local; use `git status --branch` to confirm whether they were pushed.
 
 Recent commits are:
 
 ```text
+7a892cd docs: close September session with operational audit
 55a8c54 chore(android): bump app version to 2.2.2
 2a6d483 feat(android): persist sessions and fix date selection
 f9c6773 add FluidCalendar sleep export worker
@@ -371,11 +373,11 @@ are ignored. Never commit or print their secret values.
 ## Recommended next session
 
 1. Read this file and `doc/frontend-data-model.md`, then run `git status` and
-   `docker compose ps`. Recover several GiB of host space using a verified,
-   non-database target; Docker's unused build cache is the leading candidate.
+   `docker compose ps`.
 2. Re-check and remove only the leaked `test-api-*` users and
    `hcgateway_test-api-*` databases from the failed 2026-09-19 test setup, then
-   rerun the full 71-test command above.
+   confirm the full 71-test command remains green. Do not use a broad database
+   deletion pattern.
 3. Rebuild Android because `expo-secure-store` is a native dependency, then
    validate upgrade migration from plaintext credentials, cold-start refresh
    after access-token expiry, logout clearing, temporary-network behavior, and

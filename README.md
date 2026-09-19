@@ -26,13 +26,13 @@ For the current implementation checkpoint and recommended next work, start with
   inventory endpoints are frontend-ready. See
   [doc/frontend-data-model.md](doc/frontend-data-model.md).
 
-- [ ] **Restore host disk headroom and add a capacity guardrail.** On
-  2026-09-19 the 30 GB root filesystem reached 99% usage and MongoDB refused
-  test index creation below its 500 MiB free-space minimum. Verify and reclaim
-  unused Docker build cache before touching database data, then add monitoring
-  or an operational threshold that warns well before writes are blocked. The
-  exact failed-test artifacts and verification state are recorded in
-  [doc/session-handoff.md](doc/session-handoff.md).
+- [ ] **Add a host-storage capacity guardrail.** On 2026-09-19 the original
+  30 GB root filesystem reached 99% usage and MongoDB refused test index
+  creation below its 500 MiB free-space minimum. The Proxmox VM disk was
+  expanded that day; the guest now has roughly 15.7 GB free and all 71 tests
+  pass again. Add monitoring or an operational threshold that warns well before
+  writes are blocked. The exact incident and leftover test-only artifacts are
+  recorded in [doc/session-handoff.md](doc/session-handoff.md).
 
 - [ ] **Review `/revoke` HTTP-method discrepancy.** The API docs
   ([doc/api-documentation.yml](doc/api-documentation.yml)) document
