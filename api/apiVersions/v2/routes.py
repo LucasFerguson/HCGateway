@@ -12,11 +12,10 @@ mongo = pymongo.MongoClient(os.environ['MONGO_URI'])
 from argon2 import PasswordHasher
 ph = PasswordHasher()
 
-from cryptography.fernet import Fernet
-import base64, secrets, datetime
+import secrets, datetime
 
 from analytics_engine.context import AnalyticsContext, context_for_user, validate_context
-from analytics_engine.crypto import cipher_for_user
+from analytics_engine.crypto import PLAIN_STORAGE_FORMAT, cipher_for_user, decode_stored_json
 from analytics_engine.day_dashboard import empty_day
 from analytics_engine.jobs import enqueue_job
 from analytics_engine.service import device_inventory_for_user, inventory_for_user
@@ -170,10 +169,6 @@ def sync(method):
     try: user = usrStore.find_one({'_id': userid})
     except InvalidId: return jsonify({'error': 'invalid user id'}), 400
 
-    hashed_password = user['password']
-    key = base64.urlsafe_b64encode(hashed_password.encode("utf-8").ljust(32)[:32])
-    fernet = Fernet(key)
-
     data = request.json['data']
     if type(data) != list:
         data = [data]
@@ -205,6 +200,7 @@ def sync(method):
     db = mongo['hcgateway_'+userid]
     collection = db[method]
     collection.create_index([("start", pymongo.ASCENDING), ("app", pymongo.ASCENDING)])
+    collection.create_index([("startInstant", pymongo.ASCENDING), ("app", pymongo.ASCENDING)])
     
     for item in data:
         metadata = item['metadata']
@@ -229,17 +225,21 @@ def sync(method):
             starttime = item['startTime']
             endtime = item['endTime']
 
-        toencrypt = json.dumps(dataObj).encode()
-        encrypted = fernet.encrypt(toencrypt).decode()
-
-        # fernet.decrypt(encrypted.encode()).decode()
+        stored = {
+            'data': dataObj,
+            'storageFormat': PLAIN_STORAGE_FORMAT,
+            "app": metadata['dataOrigin'],
+            "provenance": provenance,
+            "start": starttime,
+            "end": endtime,
+            "startInstant": parse_instant(starttime),
+            "endInstant": parse_instant(endtime) if endtime is not None else None,
+        }
 
         try:
-            collection.insert_one({"_id": itemid, "id": itemid, 'data': encrypted, "app": metadata['dataOrigin'], "provenance": provenance, "start": starttime, "end": endtime})
+            collection.insert_one({"_id": itemid, "id": itemid, **stored})
         except pymongo.errors.DuplicateKeyError:
-            collection.update_one({"_id": itemid}, {"$set": 
-                                                 {'data': encrypted, "app": metadata['dataOrigin'], "provenance": provenance, "start": starttime, "end": endtime}
-                                                })
+            collection.update_one({"_id": itemid}, {"$set": stored})
 
     record_upload(mongo['hcgateway'], userid, method, len(data))
     enqueue_job(mongo['hcgateway'], userid, reason='sync')
@@ -257,9 +257,7 @@ def fetch(method):
     try: user = usrStore.find_one({'_id': userid})
     except InvalidId: return jsonify({'error': 'invalid user id'}), 400
 
-    hashed_password = user['password']
-    key = base64.urlsafe_b64encode(hashed_password.encode("utf-8").ljust(32)[:32])
-    fernet = Fernet(key)
+    cipher = cipher_for_user(user)
 
     if not "queries" in request.json:
         queries = []
@@ -271,7 +269,7 @@ def fetch(method):
     
     docs = []
     for doc in collection.find(queries):
-        doc['data'] = json.loads(fernet.decrypt(doc['data'].encode()).decode())
+        doc['data'] = decode_stored_json(cipher, doc['data'])
         docs.append(doc)
 
     return jsonify(docs), 200

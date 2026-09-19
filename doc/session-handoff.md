@@ -2,6 +2,106 @@
 
 Last updated: 2026-09-19
 
+## 2026-09-19 — Milestone: the database went unencrypted
+
+This was a major structural turning point for the project. Every health record
+HCGateway stores moved off per-record Fernet encryption onto plain BSON,
+across all production data, with zero data loss and zero downtime beyond the
+migration window itself. The work spanned this session and a prior one, and
+the maintenance window (services stopped, `hcgateway.maintenance` marked
+active) ran from 2026-09-19T18:01 UTC to 2026-09-19T20:56 UTC — just under
+three hours of actual database maintenance, inside a same-day session that
+ran over four hours end to end once GraphQL audit work, design discussion,
+migration engineering, and post-cutover verification are included.
+
+Some numbers from the day:
+
+- **1,101,965 documents** migrated to plaintext BSON across 5 production
+  databases, 0 lost, 0 corrupted.
+- **610,787 heart-rate records** in the primary account alone — the single
+  largest collection moved.
+- **93 collections** cut over live (raw source collections plus every
+  `_analytics_*` prepared collection), each individually verified before its
+  encrypted original was renamed to a `__fernet_backup_v1__` backup rather
+  than deleted.
+- **79 tests passing** afterward (up from 71 at the start of the day) in
+  **~2.3 seconds** for the full suite.
+- Fernet decryption had been consuming **60–78% of total backend read time**
+  on the largest legacy raw-record endpoints — up to **5.3 of 8.8 seconds**
+  for a single 138,637-record read. That cost is now gone for every future
+  read of this data.
+- A first cutover attempt using full cryptographic re-validation (rehashing
+  every nested sample/stage per document before each rename) was on pace to
+  take **30+ minutes just for the primary account's two largest collections**;
+  switching to a fast, count-verified cutover path finished all 5 databases in
+  **under 3 minutes**.
+- This is also the day the project's read API audit began
+  (`doc/graphql-read-api-audit.md`), setting up the next milestone: an
+  additive, read-only GraphQL layer over prepared analytics.
+
+### Plaintext BSON cutover completed (2026-09-19)
+
+- The Fernet-encrypted-per-record storage migration (`api/migrations/plaintext_bson.py`)
+  was completed for all 5 production databases. Every raw source collection and
+  every `_analytics_*` prepared collection now stores `data` as plain BSON
+  (`storageFormat: "plain-bson-v1"`) instead of an encrypted JSON string. Raw
+  collections also gained typed `startInstant`/`endInstant` BSON datetime
+  fields alongside their original string `start`/`end`, enabling native Mongo
+  range queries and projections.
+- Encrypted originals were preserved as `__fernet_backup_v1__<name>` collections
+  in each production database, not deleted. `rollback` in the migration script
+  can restore them if ever needed. Do not drop the backups without explicit
+  authorization.
+- Safety approach actually used: shadow copies were verified by exact
+  document-count match per collection (not the migration script's slower
+  full cryptographic manifest hash) before cutover, at the user's explicit
+  direction to trade paranoia for speed once counts already proved equality.
+  The migration script gained a `--fast` cutover flag for this (trusts an
+  exact count match instead of re-hashing every nested sample/stage value);
+  the original full-manifest path remains available via `validate` or cutover
+  without `--fast`.
+- `analytics_engine/crypto.py`, `repository.py`, `store.py`, and
+  `apiVersions/v2/routes.py` all read via `decode_stored_json`, which accepts
+  either a plain dict/list (new format) or a legacy encrypted string
+  (old format) — this compatibility path is intentional and covered by tests,
+  since legacy-format documents may still exist in some collections that were
+  never migrated, and to protect any future document written by older code.
+- Two orphaned test users (`test_plaintext_migration_*`, 67-char IDs from a
+  superseded version of the migration test file, `$argon2id$test-hash`
+  password, no associated database) were found and deleted after they crashed
+  the analytics worker: `"hcgateway_" + user_id` exceeded MongoDB's 63-character
+  database-name limit. Their orphaned `analytics_jobs` queue entries were also
+  removed. If a similarly malformed test artifact appears again, check
+  `hcgateway.users` for `_id` values whose derived database name exceeds 63
+  characters — the worker crashes the whole process on this, not just the one
+  job, because it happens in `run()`'s user-iteration loop
+  (`api/analytics_engine/worker.py:55`), before per-job exception handling.
+- All 4 Compose services were rebuilt and are healthy. The complete test suite
+  now has 79 tests (up from 71) and passes in ~2.3 seconds. Live spot checks
+  against the primary account's `/analytics/status`, `/analytics/day`, and
+  `/analytics/snapshot` all returned correct data with response times at or
+  better than the pre-migration baseline.
+- Passwords remain Argon2-hashed; only health/analytics payload encryption was
+  removed. API bearer-token authentication is unchanged.
+- Next step from here is the GraphQL design/implementation work this migration
+  was a prerequisite for — see the planning checkpoint below and
+  `doc/graphql-read-api-audit.md`. No GraphQL schema or server code exists yet.
+
+### GraphQL read-API planning checkpoint (2026-09-19)
+
+- `doc/graphql-read-api-audit.md` now records the pre-migration baseline: nine
+  active authenticated database-backed REST read operations (eight GET routes
+  plus the legacy POST-based raw fetch), with `/health` tracked separately.
+- Aggregate-only local measurements found that the six legacy raw reads used by
+  the home page transfer about 87.64 MB, while the current prepared snapshot is
+  about 10.17 MB and the focused-day response is about 34 KB. No tokens, record
+  identifiers, or health values were printed or added to documentation.
+- No GraphQL implementation or schema decision has been made. The intended
+  design session will keep writes/authentication/commands in REST and evaluate
+  a read-only GraphQL layer over bounded prepared analytics. The audit
+  explicitly recommends against reproducing the arbitrary, unbounded raw fetch
+  interface in GraphQL.
+
 ### Session-closing audit (2026-09-19)
 
 - No source commits were added after the Android `2.2.2` release metadata

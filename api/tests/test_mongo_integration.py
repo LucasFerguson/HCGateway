@@ -5,11 +5,17 @@ import uuid
 from pymongo import MongoClient
 
 from analytics_engine.context import AnalyticsContext
-from analytics_engine.crypto import cipher_for_user
+from analytics_engine.crypto import cipher_for_user, encrypt_json
 from analytics_engine.jobs import claim_job, complete_job, enqueue_job, fail_job
 from analytics_engine.pipeline import process_health_data
 from analytics_engine.repository import empty_raw_health_data
-from analytics_engine.store import current_metadata, read_sleep_events, read_snapshot, save_analytics
+from analytics_engine.store import (
+    current_metadata,
+    read_daily,
+    read_sleep_events,
+    read_snapshot,
+    save_analytics,
+)
 
 
 @unittest.skipUnless(os.environ.get("TEST_MONGO_URI"), "TEST_MONGO_URI is required")
@@ -47,6 +53,41 @@ class MongoAnalyticsIntegrationTests(unittest.TestCase):
         self.assertEqual(snapshot["analytics"]["steps"]["daily"][0]["value"], 500)
         self.assertEqual(current_metadata(self.database)["counts"]["dailySteps"], 1)
         self.assertEqual(self.database["_analytics_runs"].count_documents({}), 1)
+        stored_snapshot = self.database["_analytics_snapshots"].find_one({"_id": run_id})
+        self.assertEqual(stored_snapshot["storageFormat"], "plain-bson-v1")
+        self.assertIsInstance(stored_snapshot["data"], dict)
+        self.assertEqual(
+            stored_snapshot["data"]["analytics"]["steps"]["daily"][0]["value"],
+            500,
+        )
+
+    def test_prepared_readers_remain_compatible_with_legacy_encrypted_data(self):
+        run_id = "legacy-run"
+        self.database["_analytics_current"].insert_one({"_id": "current", "runId": run_id})
+        self.database["_analytics_snapshots"].insert_one({
+            "_id": run_id,
+            "runId": run_id,
+            "data": encrypt_json(self.cipher, {"source": "legacy"}),
+        })
+        self.database["_analytics_daily"].insert_one({
+            "runId": run_id,
+            "date": "2026-01-01",
+            "data": encrypt_json(self.cipher, {"date": "2026-01-01", "steps": {"value": 7}}),
+        })
+        self.database["_analytics_sleep_events"].insert_one({
+            "runId": run_id,
+            "eventId": "sleep-1",
+            "date": "2026-01-01",
+            "data": encrypt_json(self.cipher, {"id": "sleep-1", "date": "2026-01-01"}),
+        })
+
+        snapshot, _ = read_snapshot(self.database, self.cipher)
+        daily, _ = read_daily(self.database, self.cipher)
+        events, _ = read_sleep_events(self.database, self.cipher)
+
+        self.assertEqual(snapshot, {"source": "legacy"})
+        self.assertEqual(daily[0]["steps"]["value"], 7)
+        self.assertEqual(events[0]["id"], "sleep-1")
 
     def test_new_revision_queued_during_lease_is_not_lost(self):
         control = self.database
@@ -95,6 +136,20 @@ class MongoAnalyticsIntegrationTests(unittest.TestCase):
         ]
         analytics = process_health_data(raw, AnalyticsContext())
         save_analytics(self.database, self.cipher, raw, analytics)
+        for collection_name in (
+            "_analytics_snapshots",
+            "_analytics_daily",
+            "_analytics_sleep_events",
+            "_analytics_device_comparisons",
+            "_analytics_summaries",
+        ):
+            documents = list(self.database[collection_name].find({}))
+            self.assertTrue(documents, collection_name)
+            self.assertTrue(all(
+                document.get("storageFormat") == "plain-bson-v1"
+                and isinstance(document.get("data"), dict)
+                for document in documents
+            ), collection_name)
         events, current = read_sleep_events(
             self.database, self.cipher, start="2026-01-02", end="2026-01-02"
         )

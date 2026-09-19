@@ -2,7 +2,7 @@ import datetime as dt
 
 from pymongo import ASCENDING, DESCENDING
 
-from .crypto import decrypt_json, encrypt_json
+from .crypto import PLAIN_STORAGE_FORMAT, decode_stored_json
 
 
 RUNS = "_analytics_runs"
@@ -91,25 +91,46 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
         }
         database[SNAPSHOTS].update_one(
             {"_id": run_id},
-            {"$setOnInsert": {"runId": run_id, "data": encrypt_json(cipher, snapshot)}},
+            {"$setOnInsert": {
+                "runId": run_id,
+                "storageFormat": PLAIN_STORAGE_FORMAT,
+                "data": snapshot,
+            }},
             upsert=True,
         )
         for payload in _daily_documents(analytics):
             database[DAILY].update_one(
                 {"runId": run_id, "date": payload["date"]},
-                {"$setOnInsert": {"runId": run_id, "date": payload["date"], "data": encrypt_json(cipher, payload)}},
+                {"$setOnInsert": {
+                    "runId": run_id,
+                    "date": payload["date"],
+                    "storageFormat": PLAIN_STORAGE_FORMAT,
+                    "data": payload,
+                }},
                 upsert=True,
             )
         for event in analytics["sleepEvents"]:
             database[SLEEP_EVENTS].update_one(
                 {"runId": run_id, "eventId": event["id"]},
-                {"$setOnInsert": {"runId": run_id, "eventId": event["id"], "date": event["date"], "data": encrypt_json(cipher, event)}},
+                {"$setOnInsert": {
+                    "runId": run_id,
+                    "eventId": event["id"],
+                    "date": event["date"],
+                    "storageFormat": PLAIN_STORAGE_FORMAT,
+                    "data": event,
+                }},
                 upsert=True,
             )
         for comparison in analytics["deviceSleep"]:
             database[DEVICE_COMPARISONS].update_one(
                 {"runId": run_id, "metric": "sleep", "source": comparison["source"]},
-                {"$setOnInsert": {"runId": run_id, "metric": "sleep", "source": comparison["source"], "data": encrypt_json(cipher, comparison)}},
+                {"$setOnInsert": {
+                    "runId": run_id,
+                    "metric": "sleep",
+                    "source": comparison["source"],
+                    "storageFormat": PLAIN_STORAGE_FORMAT,
+                    "data": comparison,
+                }},
                 upsert=True,
             )
         summaries = {
@@ -126,7 +147,12 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
         for kind, payload in summaries.items():
             database[SUMMARIES].update_one(
                 {"runId": run_id, "kind": kind},
-                {"$setOnInsert": {"runId": run_id, "kind": kind, "data": encrypt_json(cipher, payload)}},
+                {"$setOnInsert": {
+                    "runId": run_id,
+                    "kind": kind,
+                    "storageFormat": PLAIN_STORAGE_FORMAT,
+                    "data": payload,
+                }},
                 upsert=True,
             )
         completed_at = dt.datetime.now(dt.timezone.utc)
@@ -186,7 +212,7 @@ def read_snapshot(database, cipher):
     document = database[SNAPSHOTS].find_one({"_id": current["runId"]})
     if not document:
         return None, current
-    return decrypt_json(cipher, document["data"]), current
+    return decode_stored_json(cipher, document["data"]), current
 
 
 def read_daily(database, cipher, start=None, end=None, limit=400):
@@ -201,7 +227,7 @@ def read_daily(database, cipher, start=None, end=None, limit=400):
         if end:
             query["date"]["$lte"] = end
     documents = database[DAILY].find(query).sort("date", ASCENDING).limit(limit)
-    return [decrypt_json(cipher, document["data"]) for document in documents], current
+    return [decode_stored_json(cipher, document["data"]) for document in documents], current
 
 
 def read_sleep_events(database, cipher, start=None, end=None, limit=1000):
@@ -217,4 +243,4 @@ def read_sleep_events(database, cipher, start=None, end=None, limit=1000):
         if end:
             query["date"]["$lte"] = end
     documents = database[SLEEP_EVENTS].find(query).sort("date", ASCENDING).limit(limit)
-    return [decrypt_json(cipher, document["data"]) for document in documents], current
+    return [decode_stored_json(cipher, document["data"]) for document in documents], current

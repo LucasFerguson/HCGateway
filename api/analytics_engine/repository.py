@@ -1,6 +1,6 @@
-"""Read and normalize encrypted HCGateway records without modifying them."""
+"""Read and normalize HCGateway source records without modifying them."""
 
-from .crypto import decrypt_json
+from .crypto import decode_stored_json
 from .time_utils import parse_instant, utc_iso
 
 
@@ -177,10 +177,12 @@ def load_raw_health_data(user_db, cipher):
     for collection_name, (target, mapper) in MAPPERS.items():
         if collection_name not in available:
             continue
-        cursor = user_db[collection_name].find({}, {"id": 1, "app": 1, "start": 1, "end": 1, "data": 1}).sort("_id", 1)
+        cursor = user_db[collection_name].find(
+            {}, {"id": 1, "app": 1, "start": 1, "end": 1, "data": 1, "storageFormat": 1}
+        ).sort("_id", 1)
         for document in cursor:
             try:
-                data = decrypt_json(cipher, document["data"])
+                data = decode_stored_json(cipher, document["data"])
                 raw[target].append(mapper(document, data))
             except Exception as error:
                 issues.append({
