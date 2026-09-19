@@ -68,8 +68,10 @@ source of truth; this document is a pointer, not a duplicate.
   `MetricValue`-shaped field carries an explicit `MetricStatus` alongside
   `value: null` when data is absent, insufficient, or blocked.
 - Logs never contain tokens, raw health values, or record IDs.
-- Introspection stays on (for tooling/codegen); the GraphiQL landing page is
-  disabled outside development (`GRAPHQL_PLAYGROUND_ENABLED`).
+- Introspection stays on (for tooling/codegen); the interactive Sandbox
+  landing page is controlled independently by `GRAPHQL_PLAYGROUND_ENABLED`
+  (not `NODE_ENV` - see "Using the query explorer" below for why that
+  distinction matters in practice).
 
 ## Known gaps (see the implementation report for the full list)
 
@@ -93,6 +95,42 @@ source of truth; this document is a pointer, not a duplicate.
   aggregation logic is implemented in Node). `records` and `samples` cover
   the same data at full detail; a bucketed series would need to be
   materialized by the Python pipeline first.
+
+## Using the query explorer
+
+Visiting `http://<host>:6645/graphql` directly in a browser serves Apollo's
+embedded Sandbox UI (when `GRAPHQL_PLAYGROUND_ENABLED=true`) instead of raw
+JSON. **This embedded version does not work over a LAN IP or any non-`localhost`
+host**, and it never will as configured: it's loaded from Apollo's own HTTPS
+origin (`sandbox.embed.apollographql.com`) inside an iframe, and browsers
+block an HTTPS page from calling a plain-HTTP endpoint as mixed content.
+Visiting from `localhost` on the same machine as the containers has no such
+mismatch and works directly; visiting via `http://192.168.x.x:6645/graphql`
+from another device on the network will show "Unable to reach server" /
+"Schema Introspection Failure" even with the right token, because the
+browser never lets the request leave the page - this is a browser security
+policy, not a server misconfiguration, and no server-side change fixes it
+short of adding TLS in front of this service.
+
+**From another device on the network, use the standalone Sandbox instead:**
+
+1. Get a token (same as "Verifying it works" below).
+2. Open **https://studio.apollographql.com/sandbox/explorer** - a normal,
+   non-embedded HTTPS page. Browsers are generally more permissive about a
+   top-level page (as opposed to an embedded iframe) reaching a local/private
+   HTTP address, though this still depends on the browser and may not work
+   everywhere.
+3. Enter the endpoint URL at the top: `http://<host>:6645/graphql` (e.g.
+   `http://192.168.8.239:6645/graphql`).
+4. Open the **Headers** panel (bottom of the operation editor) and add:
+   `Authorization` → `Bearer <token>`.
+5. The schema explorer on the left should populate, and operations run
+   against your real data, same as the embedded version would.
+
+If the standalone version is also blocked by your browser's mixed-content
+policy, the reliable fallback is opening `http://localhost:6645/graphql`
+directly on the machine running the containers - there is no HTTPS/HTTP
+mismatch there at all, so it works without any of the above.
 
 ## Verifying it works
 

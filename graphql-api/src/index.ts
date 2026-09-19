@@ -8,6 +8,7 @@ import { ApolloServerPluginLandingPageLocalDefault } from "@apollo/server/plugin
 import { expressMiddleware } from "@as-integrations/express5";
 import { makeExecutableSchema } from "@graphql-tools/schema";
 import { GraphQLError } from "graphql";
+import type { Request } from "express";
 
 import { loadConfig } from "./config.js";
 import { typeDefs } from "./schema/typeDefs.js";
@@ -17,6 +18,54 @@ import { buildContext, GraphQLContext } from "./context.js";
 import { AuthError } from "./security/auth.js";
 import { depthLimitRule, aliasLimitRule, complexityRule } from "./security/validationRules.js";
 import { responseSizeCapPlugin } from "./security/responseSizeCap.js";
+
+function isLocalhostRequest(req: Request): boolean {
+  const host = (req.headers.host || "").split(":")[0];
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function isBrowserRequest(req: Request): boolean {
+  // GraphQL clients (curl, Apollo Client's HttpLink, etc.) don't send
+  // text/html in Accept; real browser navigation does.
+  const accept = req.headers.accept || "";
+  return accept.includes("text/html");
+}
+
+function renderRemoteSandboxRedirectPage(req: Request): string {
+  const endpoint = `http://${req.headers.host}/graphql`;
+  const escapedEndpoint = endpoint.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>HCGateway GraphQL API</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem; line-height: 1.5; color: #1a1a1a; }
+    code, .endpoint { background: #f0f0f0; padding: 0.15em 0.4em; border-radius: 4px; font-family: ui-monospace, monospace; }
+    .endpoint { display: inline-block; margin: 0.5em 0; font-size: 1.05em; user-select: all; }
+    ol { padding-left: 1.3em; }
+    li { margin-bottom: 0.6em; }
+    a.button { display: inline-block; margin-top: 1em; padding: 0.6em 1.2em; background: #311c87; color: white; text-decoration: none; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <h1>HCGateway GraphQL API</h1>
+  <p>
+    The embedded query explorer only works when this page is opened from
+    <code>localhost</code> - browsers block it here because it loads from an
+    HTTPS origin and this endpoint is plain HTTP. Use the standalone Sandbox
+    instead:
+  </p>
+  <ol>
+    <li>Get a bearer token (see <code>doc/graphql-api.md</code> in the repo).</li>
+    <li>Open the standalone Sandbox: <a class="button" href="https://studio.apollographql.com/sandbox/explorer" target="_blank" rel="noopener">studio.apollographql.com/sandbox/explorer</a></li>
+    <li>Set the endpoint URL to: <span class="endpoint">${escapedEndpoint}</span></li>
+    <li>In the <strong>Headers</strong> panel, add <code>Authorization</code>: <code>Bearer &lt;your token&gt;</code></li>
+  </ol>
+  <p>Full explanation and a plain <code>curl</code> example: see <code>doc/graphql-api.md</code>.</p>
+</body>
+</html>`;
+}
 
 async function main() {
   const config = loadConfig();
@@ -78,6 +127,28 @@ async function main() {
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
   });
+
+  // Apollo's embedded Sandbox (served below for real browser GETs to
+  // /graphql) is loaded from an HTTPS iframe (sandbox.embed.apollographql.com)
+  // regardless of what host you're viewing it from. Browsers treat
+  // localhost/127.0.0.1 as a "potentially trustworthy origin" exempt from
+  // mixed-content blocking, so the embedded version works there - but it
+  // cannot work from any other host (a LAN IP, a hostname), since the
+  // HTTPS-page-to-HTTP-endpoint request gets blocked before it ever reaches
+  // this server. Detect that case and serve a small static page pointing at
+  // the standalone (non-embedded) Sandbox instead of letting it fail
+  // confusingly with "Schema Introspection Failure" - see
+  // doc/graphql-api.md's "Using the query explorer" section for the full
+  // explanation.
+  if (config.playgroundEnabled) {
+    app.get("/graphql", (req, res, next) => {
+      if (isBrowserRequest(req) && !isLocalhostRequest(req)) {
+        res.type("html").send(renderRemoteSandboxRedirectPage(req));
+        return;
+      }
+      next();
+    });
+  }
 
   app.use(
     "/graphql",
