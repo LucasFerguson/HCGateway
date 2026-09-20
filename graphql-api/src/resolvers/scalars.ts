@@ -58,7 +58,7 @@ export const DateScalar = new GraphQLScalarType({
   },
 });
 
-/** JSON: opaque escape hatch for breakdown30Day / error / result diagnostic blobs. */
+/** JSON: opaque escape hatch for error / result / counts diagnostic blobs. */
 export const JSONScalar = new GraphQLScalarType({
   name: "JSON",
   description: "Opaque JSON value.",

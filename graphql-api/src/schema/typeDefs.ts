@@ -505,7 +505,15 @@ export const typeDefs = /* GraphQL */ `
     average7DayMinutes: Float
     average30DayMinutes: Float
     previous30DayAverageMinutes: Float
-    breakdown30Day: JSON
+    breakdown30Day: SleepDebtBreakdown
+  }
+
+  type SleepDebtBreakdown {
+    recordedDays: Int!
+    none: Int!
+    low: Int!
+    moderate: Int!
+    high: Int!
   }
 
   type SleepDebtDay {
@@ -536,7 +544,14 @@ export const typeDefs = /* GraphQL */ `
     average7DayScore: Float
     average30DayScore: Float
     previous30DayAverageScore: Float
-    breakdown30Day: JSON
+    breakdown30Day: SleepConsistencyBreakdown
+  }
+
+  type SleepConsistencyBreakdown {
+    scoredDays: Int!
+    optimal: Int!
+    sufficient: Int!
+    poor: Int!
   }
 
   type SleepConsistencyDay {
