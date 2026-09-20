@@ -13,8 +13,24 @@ import { createComplexityRule, ComplexityEstimatorArgs } from "graphql-query-com
  * All three run as GraphQL validation rules, before any resolver executes.
  */
 
+/**
+ * graphql-depth-limit's own errors carry no `extensions.code`, unlike our
+ * alias/complexity rules below - wrap it so all three limiters are
+ * consistently identifiable in logs and client-side error handling.
+ */
 export function depthLimitRule(maxDepth: number): ValidationRule {
-  return depthLimit(maxDepth) as ValidationRule;
+  return function DepthLimit(context: ValidationContext): ASTVisitor {
+    const originalReportError = context.reportError.bind(context);
+    context.reportError = (error: GraphQLError) => {
+      originalReportError(
+        new GraphQLError(error.message, {
+          nodes: error.nodes,
+          extensions: { code: "QUERY_DEPTH_LIMIT_EXCEEDED" },
+        }),
+      );
+    };
+    return (depthLimit(maxDepth) as (ctx: ValidationContext) => ASTVisitor)(context);
+  };
 }
 
 /** Reject an operation with more than `maxAliases` field aliases anywhere in it. */

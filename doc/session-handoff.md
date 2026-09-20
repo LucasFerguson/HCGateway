@@ -1,6 +1,65 @@
 # Session handoff: analytics backend
 
-Last updated: 2026-09-19
+Last updated: 2026-09-20
+
+## 2026-09-20 — GraphQL API structured logging
+
+`graphql-api/src/logging.ts` adds structured JSON-line request logging
+(stdout, one line per operation) - previously the service had no logging
+beyond a startup message and a fatal-crash `console.error`. Covers:
+
+- Every completed GraphQL request: operation name, duration, HTTP status,
+  the authenticated `userId` (never the token), and error count/codes.
+- Auth failures (missing/invalid/expired token) as a separate
+  `graphql_auth_failure` event - these were found, live, to log **nothing at
+  all** under the original implementation, because Apollo's request-lifecycle
+  plugin hooks never fire when the `context()` callback itself throws (which
+  is how auth rejection works here). Logged directly from the `context()`
+  catch block in `index.ts` instead.
+- Depth/alias/complexity validation-rule rejections: confirmed live that
+  validation-stage failures *do* reach the normal plugin lifecycle (a
+  malformed-field test query logged correctly as `GRAPHQL_VALIDATION_FAILED`/
+  400), so the same mechanism covers the safety limiters. `depthLimitRule`
+  in `security/validationRules.ts` was patched to attach a proper
+  `QUERY_DEPTH_LIMIT_EXCEEDED` extensions code, since the underlying
+  `graphql-depth-limit` package's own errors carry no code at all (unlike
+  the alias/complexity rules, which already did).
+
+Never logs: the bearer token, query variables, resolver return values, or
+raw health values - matching the existing rule already followed elsewhere in
+this service (`security/auth.ts`, `formatError` in `index.ts`).
+
+Deliberately deferred (asked about, not selected this round): Sentry/error
+tracking (`@sentry/node`, to match the Flask API's existing `sentry-sdk`) and
+per-field resolver timing. Revisit if/when real traffic makes either useful.
+
+Verified live end-to-end after a full `docker compose build graphql-api` +
+`docker compose up -d graphql-api` (a plain `restart` does not pick up a
+rebuilt image or edited `.env` - this has bitten this project more than once
+this week; always recreate, not restart, after an image or env change).
+
+## 2026-09-19 — Account cleanup and config
+
+- Set `lucas`'s `birthDate` to `2003-09-16` via `PUT /api/v2/analytics/config`
+  (verified afterward through the new GraphQL API too). This queued a normal
+  analytics rebuild job (revision 42387) so healthspan calculations start
+  using the real configured age; no manual pipeline rerun needed.
+- Deleted the `Lucas` (capital L) account entirely: user `67ff4a5402e55009f847ff7f`,
+  token expired 2025-04-17 (stale, unused for well over a year), 1,510 raw
+  records. Removed the user record from `hcgateway.users`, its
+  `analytics_jobs` entry, and dropped the whole `hcgateway_67ff4a5402e55009f847ff7f`
+  database (raw collections, prepared analytics, and the encrypted
+  `__fernet_backup_v1__*` backups from the September plaintext-BSON
+  migration). This incidentally also removed a leftover obsolete
+  `_analyticsDaily` (no underscore separator) prototype collection that an
+  earlier handoff note had flagged as safe to remove once confirmed unused.
+  `lucasadmin` (30,737 records, real multi-month sleep history) was
+  explicitly evaluated and kept - do not delete it without a separate,
+  explicit decision; it is real data, not a test fixture.
+- The 7 leftover `hcgateway_test-api-*` databases from the 2026-09-19
+  low-disk test-run failure (see below) were also dropped this session,
+  by exact prefix match, after their orphaned users were already deleted
+  earlier. None remain.
 
 ## 2026-09-19 — Milestone: read-only GraphQL API implemented
 

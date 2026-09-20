@@ -18,6 +18,7 @@ import { buildContext, GraphQLContext } from "./context.js";
 import { AuthError } from "./security/auth.js";
 import { depthLimitRule, aliasLimitRule, complexityRule } from "./security/validationRules.js";
 import { responseSizeCapPlugin } from "./security/responseSizeCap.js";
+import { requestLoggingPlugin, logAuthFailure } from "./logging.js";
 
 function isLocalhostRequest(req: Request): boolean {
   const host = (req.headers.host || "").split(":")[0];
@@ -83,6 +84,7 @@ async function main() {
       complexityRule(config.maxQueryComplexity),
     ],
     plugins: [
+      requestLoggingPlugin(),
       responseSizeCapPlugin(config.responseSizeCapBytes),
       // Apollo Server's own default landing-page plugin picks Sandbox vs.
       // the bare "send a POST request" page based on NODE_ENV, independent
@@ -157,6 +159,7 @@ async function main() {
         try {
           return await buildContext(mongoClient, config, req.headers.authorization);
         } catch (error) {
+          logAuthFailure(error);
           if (error instanceof AuthError) {
             // Re-throw as-is; Apollo Server surfaces context-construction
             // errors as a top-level GraphQL error response before any
