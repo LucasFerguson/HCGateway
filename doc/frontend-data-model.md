@@ -2,7 +2,7 @@
 
 HCGateway keeps encrypted Health Connect records as its source of truth. A
 separate Python worker decrypts the supported analytics signals, normalizes
-them, runs `health-analytics-v8.3`, and writes encrypted, immutable
+them, runs `health-analytics-v8.4`, and writes encrypted, immutable
 prepared runs back to each user's MongoDB database.
 
 The implementation is a behavioral port of the dashboard repository's
@@ -56,7 +56,7 @@ dashboard contract unchanged:
   "source": "health-connect",
   "sleepSessions": [],
   "analytics": {
-    "algorithmVersion": "health-analytics-v8.3",
+    "algorithmVersion": "health-analytics-v8.4",
     "timeZone": "America/Chicago",
     "sourceFingerprint": "...",
     "configurationFingerprint": "...",
@@ -96,7 +96,7 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
 
 ```json
 {
-  "runId": "health-analytics-v8.3:<source>:<configuration>",
+  "runId": "health-analytics-v8.4:<source>:<configuration>",
   "count": 1,
   "days": [
     {

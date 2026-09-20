@@ -1,8 +1,10 @@
 import datetime as dt
+from collections import defaultdict
 
 from pymongo import ASCENDING, DESCENDING
 
 from .crypto import PLAIN_STORAGE_FORMAT, decode_stored_json
+from .time_utils import date_key
 
 
 RUNS = "_analytics_runs"
@@ -33,7 +35,27 @@ def _without(container, key):
     return {name: value for name, value in container.items() if name != key}
 
 
+def _strain_workouts_by_date(analytics):
+    """Group full per-workout strain detail by every local date it touches.
+
+    Mirrors day_dashboard.py's own workout/date membership rule (a workout
+    belongs to a date if its start OR end local date matches), so a workout
+    spanning local midnight appears once per date it actually overlaps -
+    consistent with how the day-view timeline already surfaces it, just
+    with full strain detail (loadMinutes/zoneMinutes/timeline) instead of
+    the day view's reduced strainContribution/strainQuality projection.
+    """
+    time_zone = analytics["timeZone"]
+    by_date = defaultdict(list)
+    for workout in analytics["strain"].get("workouts", []):
+        dates = {date_key(workout["startAt"], time_zone), date_key(workout["endAt"], time_zone)}
+        for date in dates:
+            by_date[date].append(workout)
+    return by_date
+
+
 def _daily_documents(analytics):
+    strain_workouts = _strain_workouts_by_date(analytics)
     names = {
         "sleep": analytics["dailySleep"],
         "sleepDebt": analytics["sleepDebt"]["daily"],
@@ -49,9 +71,16 @@ def _daily_documents(analytics):
         "recovery": analytics["recovery"]["daily"],
         "dayView": analytics["dayViews"],
     }
-    dates = sorted({item["date"] for values in names.values() for item in values})
+    dates = sorted({item["date"] for values in names.values() for item in values} | set(strain_workouts))
     lookup = {name: {item["date"]: item for item in values} for name, values in names.items()}
-    return [{"date": date, **{name: values.get(date) for name, values in lookup.items()}} for date in dates]
+    return [
+        {
+            "date": date,
+            **{name: values.get(date) for name, values in lookup.items()},
+            "strainWorkouts": strain_workouts.get(date, []),
+        }
+        for date in dates
+    ]
 
 
 def save_analytics(database, cipher, raw, analytics, issues=None):

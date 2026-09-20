@@ -2,6 +2,63 @@
 
 Last updated: 2026-09-20
 
+## 2026-09-20 — Persisted per-workout strain detail (health-analytics-v8.4)
+
+Closed the `StrainSummary.workouts` GraphQL gap: `store.py`'s
+`_daily_documents` now writes a `strainWorkouts` field into each
+`_analytics_daily` date document (full per-workout strain: `loadMinutes`,
+`zoneMinutes`, `timeline`, `quality`), grouped via a new
+`_strain_workouts_by_date` helper onto every local date a workout's start or
+end touches - the same membership rule `day_dashboard.py`'s
+`Day.timeline.workouts` already used for its own reduced
+`strainContribution`/`strainQuality` projection. `graphql-api`'s
+`strainSummary` resolver now reads and dedupes across dates by workout id.
+6 new Python unit tests in `api/tests/test_store_daily_documents.py`
+(85 total, up from 79).
+
+**A real lesson from verifying this live**: adding a field to what
+`save_analytics` persists is a genuine schema change, but `save_analytics`'s
+idempotency check (`if current.runId == run_id: return "unchanged"`) is keyed
+only on data + configuration fingerprints, never on pipeline/store *code*.
+A manually triggered `POST /api/v2/analytics/rebuild` against unchanged
+source data and config silently no-ops even when the code that would
+process it has changed - there is no feedback that nothing happened besides
+the response shape being identical to a real rebuild. This was caught only
+by directly inspecting `_analytics_daily` documents in Mongo after the
+"rebuild" claimed success and finding the new field simply absent.
+
+The correct fix, and the project's existing sanctioned mechanism for
+exactly this: bump `ALGORITHM_VERSION` (`api/analytics_engine/pipeline.py`,
+now `health-analytics-v8.4`, was `v8.3`). `analytics-worker`'s startup check
+(`worker.py`, queues an `algorithm_upgrade` job for every user whose current
+run predates the running algorithm version) then reprocesses every real
+account automatically on the next container start - verified across all 4
+production accounts, no manual per-account nudging needed. The primary
+account's full reprocess took about 17 minutes (up from an ~8-minute August
+benchmark - consistent with continued data growth since then, not a
+performance regression in the new code; confirmed via `docker stats` and
+process state during the wait rather than assumed). Live-verified
+afterward: all 474 real exercise sessions appear in
+`viewer.analytics.strain.workouts` via GraphQL with zero duplicates,
+confirming the midnight-spanning dedupe logic is correct against real data.
+
+Updated every doc that named the algorithm version explicitly:
+`AGENTS.md`, `README.md`, `doc/frontend-data-model.md`,
+`doc/graphql-api.md`'s known-gaps entry (now marked fixed with the
+reasoning). `doc/graphql-schema-design.md`'s deferred
+`HeartRateData.series(resolution:)` gap remains deliberately unaddressed -
+real new aggregation logic, out of scope for this fix.
+
+Added `./redeploy-docker-containers.sh [service...]` at the repo root:
+rebuilds and recreates (`docker compose build` + `up -d`) any or all
+services in one command. Exists because `docker compose restart` reuses the
+running container's existing image/environment and does **not** pick up a
+rebuilt image or an edited `.env` - this has caused confusion more than
+once this week (the GraphQL Sandbox landing-page fix earlier today, and
+almost this same strain-workouts verification, both required remembering
+the distinction manually). Referenced in `AGENTS.md`'s verification section
+now so it doesn't need rediscovering next session.
+
 ## 2026-09-20 — GraphQL API structured logging
 
 `graphql-api/src/logging.ts` adds structured JSON-line request logging

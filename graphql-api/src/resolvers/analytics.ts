@@ -717,17 +717,24 @@ async function healthspanSummary(summary: Record<string, unknown> | null, runId:
 async function strainSummary(summary: Record<string, unknown> | null, runId: string, context: GraphQLContext) {
   const daily = await context.withTimeout(readDaily(context.userDb, runId), "analytics.strain.daily");
   const dailyRows = daily.map((doc) => doc.strain).filter(Boolean) as Record<string, unknown>[];
-  // Workouts live only inside each daily strain row's own analytics build in
-  // pipeline.py's in-memory `strain["workouts"]`; store.py strips `workouts`
-  // from the summary (kept out via _without) but does not persist a
-  // separate per-date workouts collection. Per-day workouts are therefore
-  // read back only from the full (non-summary) strain object at run time -
-  // this service reconstructs it by reading the daily rows, which do not
-  // carry workouts. DEVIATION: StrainSummary.workouts is only populated when
-  // the frontend's own view already tags workouts on Day.timeline.workouts;
-  // there is no persisted whole-history strain.workouts array to read here,
-  // so this field intentionally returns [] pending a Python-side change to
-  // persist workouts into _analytics_daily (or a new dedicated collection).
+  // Each _analytics_daily document now carries a `strainWorkouts` list
+  // (store.py's _strain_workouts_by_date) - full per-workout strain detail
+  // grouped onto every local date the workout's start or end touches, the
+  // same membership rule day_dashboard.py's Day.timeline.workouts already
+  // uses. A workout spanning local midnight therefore appears on two
+  // documents; dedupe by id (falling back to identity) so this whole-history
+  // field returns each workout exactly once regardless of date span.
+  const seen = new Set<unknown>();
+  const workoutRows: Record<string, unknown>[] = [];
+  for (const doc of daily) {
+    const workouts = (doc.strainWorkouts as Record<string, unknown>[] | undefined) ?? [];
+    for (const workout of workouts) {
+      const key = workout.id ?? workout;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      workoutRows.push(workout);
+    }
+  }
   return {
     algorithmVersion: summary?.algorithmVersion ?? "",
     status: summary?.status ?? "unavailable",
@@ -739,7 +746,7 @@ async function strainSummary(summary: Record<string, unknown> | null, runId: str
     availability: summary?.availability ?? { available: false, reasons: [] },
     source: summary?.source ?? null,
     __daily: dailyRows,
-    __workouts: [] as Record<string, unknown>[],
+    __workouts: workoutRows,
   };
 }
 

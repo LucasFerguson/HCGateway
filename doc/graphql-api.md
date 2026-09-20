@@ -82,12 +82,19 @@ source of truth; this document is a pointer, not a duplicate.
   pinned to `graphql ^16.x`. Deferred selections execute correctly today,
   just as part of one complete response rather than a streamed one, until
   Apollo ships a release compatible with graphql 17.
-- `StrainSummary.workouts` always returns `[]`: per-workout strain detail is
-  computed in-memory during a pipeline run (`pipeline.py`) but is not
-  persisted to any `_analytics_*` collection, so there is nothing for this
-  read-only service to read back. Needs a Python-side change (e.g.
-  persisting `strain.workouts` into `_analytics_daily` or a new collection)
-  before this field can return real data.
+- ~~`StrainSummary.workouts` always returns `[]`~~ **Fixed 2026-09-20.**
+  `store.py`'s `_daily_documents` now writes a `strainWorkouts` field into
+  each `_analytics_daily` date document (full per-workout strain detail:
+  `loadMinutes`, `zoneMinutes`, `timeline`, `quality` - not just the reduced
+  `strainContribution`/`strainQuality` `Day.timeline.workouts` already
+  carried), grouped onto every local date the workout's start or end
+  touches, mirroring `day_dashboard.py`'s existing workout/date membership
+  rule so a midnight-spanning workout lands correctly on both dates. The
+  GraphQL resolver reads it back across all dates and dedupes by workout id.
+  Requires an analytics rebuild (`POST /api/v2/analytics/rebuild`) for
+  existing runs computed before this change, since prepared runs are
+  immutable - a new upload or rebuild is needed for this field to stop
+  being empty on data processed prior to this fix.
 - `HeartRateData.series(resolution:)` from the original design-doc
   hypothesis was not implemented: there is no bucketed-series aggregation
   for arbitrary resolutions anywhere in the Python analytics pipeline to

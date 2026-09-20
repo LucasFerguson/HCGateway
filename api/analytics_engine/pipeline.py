@@ -23,7 +23,7 @@ from .strain import calculate_strain
 from .time_utils import date_key, local_minute_of_day, parse_instant, split_by_local_day
 
 
-ALGORITHM_VERSION = "health-analytics-v8.3"
+ALGORITHM_VERSION = "health-analytics-v8.4"
 HEALTHSPAN_MODEL_VERSION = "experimental-healthspan-v1"
 DAY_SECONDS = 86_400
 YEAR_DAYS = 365.2425
