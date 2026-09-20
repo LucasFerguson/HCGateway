@@ -6,7 +6,7 @@ import { typeDefs } from "../schema/typeDefs.js";
 import { resolvers } from "../resolvers/index.js";
 import { buildContext, GraphQLContext } from "../context.js";
 import { AppConfig } from "../config.js";
-import { depthLimitRule, aliasLimitRule, complexityRule } from "../security/validationRules.js";
+import { depthLimitRule, aliasLimitRule, complexityPlugin } from "../security/validationRules.js";
 import { CONTROL_DB_NAME } from "../db/mongo.js";
 
 /**
@@ -57,8 +57,8 @@ export async function createTestHarness(configOverrides: Partial<AppConfig> = {}
     validationRules: [
       depthLimitRule(config.maxQueryDepth),
       aliasLimitRule(config.maxAliasCount),
-      complexityRule(config.maxQueryComplexity),
     ],
+    plugins: [complexityPlugin(config.maxQueryComplexity)],
     includeStacktraceInErrorResponses: false,
   });
   await server.start();

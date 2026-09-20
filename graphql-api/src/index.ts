@@ -16,7 +16,7 @@ import { resolvers } from "./resolvers/index.js";
 import { connectMongo, closeMongo } from "./db/mongo.js";
 import { buildContext, GraphQLContext } from "./context.js";
 import { AuthError } from "./security/auth.js";
-import { depthLimitRule, aliasLimitRule, complexityRule } from "./security/validationRules.js";
+import { depthLimitRule, aliasLimitRule, complexityPlugin } from "./security/validationRules.js";
 import { responseSizeCapPlugin } from "./security/responseSizeCap.js";
 import { requestLoggingPlugin, logAuthFailure } from "./logging.js";
 
@@ -81,10 +81,10 @@ async function main() {
     validationRules: [
       depthLimitRule(config.maxQueryDepth),
       aliasLimitRule(config.maxAliasCount),
-      complexityRule(config.maxQueryComplexity),
     ],
     plugins: [
       requestLoggingPlugin(),
+      complexityPlugin(config.maxQueryComplexity),
       responseSizeCapPlugin(config.responseSizeCapBytes),
       // Apollo Server's own default landing-page plugin picks Sandbox vs.
       // the bare "send a POST request" page based on NODE_ENV, independent

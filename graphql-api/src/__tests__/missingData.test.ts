@@ -155,4 +155,34 @@ describe("missing-data representation", () => {
     expect(day.headlineScores.sleepDuration.value).toBeNull();
     expect(day.supportingMetrics.steps.value).toBeNull();
   });
+
+  it("resolves an operation that declares $variables", async () => {
+    // Regression test found live 2026-09-20: graphql-query-complexity's own
+    // createComplexityRule ValidationRule helper internally coerces
+    // variable values during validate() using whatever `variables` it was
+    // constructed with at server-startup time - never the current
+    // request's actual variables, since a ValidationRule has no access to
+    // per-request data (variable coercion is an execution-time concern in
+    // graphql-js, not part of standard validation). That made EVERY
+    // operation declaring a required $variable fail with "Variable ... was
+    // not provided", even when it was correctly supplied in the request
+    // body - reproducible with a bare curl POST, confirming it wasn't a
+    // client bug. Fixed by moving complexity enforcement to a
+    // didResolveOperation plugin (security/validationRules.ts's
+    // complexityPlugin), which runs after variable coercion and does
+    // receive the real request variables.
+    const result = await harness.executeAsUser(
+      user.token,
+      `query GetDay($date: Date!) {
+        viewer {
+          analytics {
+            day(date: $date) { date dayState }
+          }
+        }
+      }`,
+      { date: "2026-01-05" },
+    );
+    expect(result.errors).toBeUndefined();
+    expect((result.body as any).viewer.analytics.day.date).toBe("2026-01-05");
+  });
 });

@@ -87,4 +87,5 @@ describe("query-shape safety limits", () => {
     expect(result.errors).toBeUndefined();
     expect((result.body as any).viewer.config.homeTimeZone).toBe("UTC");
   });
+
 });

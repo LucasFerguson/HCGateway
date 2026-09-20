@@ -1,6 +1,8 @@
 import depthLimit from "graphql-depth-limit";
 import { GraphQLError, ValidationContext, FieldNode, ASTVisitor, ValidationRule } from "graphql";
-import { createComplexityRule, ComplexityEstimatorArgs } from "graphql-query-complexity";
+import { getComplexity, ComplexityEstimatorArgs } from "graphql-query-complexity";
+import type { ApolloServerPlugin } from "@apollo/server";
+import type { GraphQLContext } from "../context.js";
 
 /**
  * Query-shape safety limits, per doc/graphql-schema-design.md's checklist:
@@ -102,13 +104,54 @@ function weightedFieldEstimator() {
   };
 }
 
-export function complexityRule(maxComplexity: number): ValidationRule {
-  return createComplexityRule({
-    maximumComplexity: maxComplexity,
-    estimators: [weightedFieldEstimator()],
-    createError: (max, actual) =>
-      new GraphQLError(`Query is too complex: ${actual}. Maximum allowed complexity: ${max}.`, {
-        extensions: { code: "QUERY_COMPLEXITY_EXCEEDED" },
-      }),
-  }) as unknown as ValidationRule;
+/**
+ * Complexity is enforced as a PLUGIN (didResolveOperation), not a
+ * ValidationRule, despite graphql-query-complexity shipping a
+ * `createComplexityRule` helper that looks like a drop-in ValidationRule.
+ *
+ * Bug found live 2026-09-20: any operation declaring $variables failed with
+ * "Variable ... was not provided", even when the variable was correctly
+ * supplied in the request body - reproducible with `curl` directly, so not
+ * a client issue. Traced through actual runtime execution (temporarily
+ * patching @apollo/server's ESM build to confirm httpRequest.body and
+ * request.variables were correct at every step up to and including
+ * requestPipeline.js's execute() call) to graphql-query-complexity's
+ * QueryComplexity class: it internally calls graphql-js's getVariableValues
+ * using `this.options.variables`, DURING validate() - but `validate()`
+ * itself has no access to per-request variables (variable coercion is an
+ * execution-time concern in graphql-js, not part of the standard validation
+ * phase). `createComplexityRule(options)` bakes `options.variables` in once
+ * at server-startup time, so every request was validated as if it supplied
+ * zero variables, and any operation with a required variable failed
+ * getVariableValues's coercion before user code ever ran.
+ *
+ * The correct integration point (confirmed via graphql-query-complexity's
+ * own recommended usage for Apollo Server 4/5, since its ValidationRule
+ * helper predates variables-aware plugin hooks): call the library's
+ * standalone `getComplexity()` from `didResolveOperation`, which runs after
+ * parsing AND variable coercion, with real `requestContext.request.variables`
+ * available.
+ */
+export function complexityPlugin(maxComplexity: number): ApolloServerPlugin<GraphQLContext> {
+  return {
+    async requestDidStart() {
+      return {
+        async didResolveOperation(requestContext) {
+          const complexity = getComplexity({
+            schema: requestContext.schema,
+            query: requestContext.document,
+            operationName: requestContext.operationName ?? undefined,
+            variables: requestContext.request.variables ?? {},
+            estimators: [weightedFieldEstimator()],
+          });
+          if (complexity > maxComplexity) {
+            throw new GraphQLError(
+              `Query is too complex: ${complexity}. Maximum allowed complexity: ${maxComplexity}.`,
+              { extensions: { code: "QUERY_COMPLEXITY_EXCEEDED" } },
+            );
+          }
+        },
+      };
+    },
+  };
 }
