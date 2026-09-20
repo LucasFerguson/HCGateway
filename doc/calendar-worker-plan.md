@@ -2,7 +2,9 @@
 
 Status: implemented and deployed. The initial seven-day export delivered seven
 events on 2026-08-29; continuous recent-window polling is active and historical
-backfill remains disabled.
+backfill remains disabled. Periodic FluidCalendar-side reconciliation (see
+below) was added 2026-09-20 as the correctness backstop for permanently
+failed deliveries.
 
 This document records the intended boundary between health analytics and the
 FluidCalendar integration. The first delivery milestone exports every
@@ -124,6 +126,63 @@ The first can reduce scans; the second makes recovery and backfill simpler. A
 hybrid is preferable: enqueue as an optimization, then periodically reconcile
 the current run against the ledger as the correctness backstop.
 
+### FluidCalendar-side reconciliation (implemented 2026-09-20)
+
+The hybrid above is now implemented, closing a real gap: a delivery that
+exhausts its retries (`permanent_failure`) previously had no automatic path
+back to retry unless the underlying prepared event's rendered payload
+changed. Nine sleep events (wake dates 2026-09-12 through 2026-09-19) were
+found stuck this way after FluidCalendar returned HTTP 500 for about 16
+hours; the periodic "recent scan" logs kept reporting success the entire
+time because they measure queueing, not delivery outcome.
+
+`calendar_worker.reconcile_window` runs on its own interval
+(`CALENDAR_SLEEP_RECONCILE_INTERVAL_SECONDS`, default 21600 seconds/6 hours;
+disable with `CALENDAR_SLEEP_RECONCILE_ENABLED=false`), independent of the
+5-minute recent-scan poll, using the same durable-lease pattern as backfill
+so a container restart does not reset the interval and two worker instances
+cannot run it concurrently. For a bounded recent window
+(`CALENDAR_SLEEP_RECONCILE_WINDOW_DAYS`, default 7 local wake dates ending
+on the current recent-scan window's end date), it:
+
+1. Reads every ledger row in that window whose state is `delivered` or
+   `permanent_failure` (the two states that claim to know FluidCalendar's
+   side of the world, as opposed to `pending`/`retryable`/`delivering`,
+   which the normal delivery loop already owns).
+2. Calls FluidCalendar's own `GET /api/events?start=&end=` (a read call,
+   confirmed already working; the previously documented
+   `GET /api/calendar/events` windowed endpoint 404s against the deployed
+   FluidCalendar version, so the plain `/api/events` list is used instead,
+   padded a day on each side and filtered client-side by `feedId` since the
+   endpoint is not feed-scoped server-side) for that window.
+3. Compares: a `delivered` row is confirmed by looking up its stored
+   `remoteEventId` in the fetched list (a cancelled remote event does not
+   count as present); a `permanent_failure` row has no `remoteEventId` to
+   look up, so it falls back to FluidCalendar's own strict `skipIfExists`
+   fields (title + start + end + description, recomputed from the current
+   prepared event) in case the create actually succeeded server-side but the
+   ledger update was lost -- this avoids requeuing (and duplicating) an
+   event that is already there.
+4. Any row whose expected event cannot be confirmed -- covering both a
+   `permanent_failure` row that never landed and, deliberately, a
+   `delivered` row whose event was somehow removed or never actually landed
+   despite a successful-looking response -- is reset via
+   `requeue_sleep_delivery`: `state` back to `pending`, `attempts` to 0,
+   `operation` to `create`, and the stored `remoteEventId`/`externalEventId`
+   cleared (a confirmed-missing event cannot be safely `PATCH`ed back into
+   existence). The normal `deliver_one` loop then redelivers it on its own
+   schedule; reconciliation itself never calls FluidCalendar's write
+   endpoints.
+5. A truncated or paginated listing is treated as inconclusive and raised as
+   a retryable error rather than risked as a false "missing" -- a page cut
+   short must never be read as proof an event is absent.
+
+This does not fully replace the "two ways to discover work" tradeoff above:
+reconciliation is a periodic backstop over a bounded recent window, not a
+substitute for the enqueue-on-scan path, and it deliberately runs far less
+often than the delivery loop since it is a safety net, not the primary
+mechanism.
+
 ## Initial event representation
 
 Subject to final product choices, the proposed first version is:
@@ -193,8 +252,11 @@ selectable without changing code. Compose injects these values only into
 - `CALENDAR_SLEEP_INITIAL_LOOKBACK_DAYS` (default 7);
 - `CALENDAR_SLEEP_POLL_SECONDS` (default 300);
 - opt-in `CALENDAR_SLEEP_BACKFILL_ENABLED` (default false);
-- `CALENDAR_SLEEP_BACKFILL_BATCH_DAYS` (default 7); and
-- `CALENDAR_SLEEP_BACKFILL_INTERVAL_SECONDS` (default 86400).
+- `CALENDAR_SLEEP_BACKFILL_BATCH_DAYS` (default 7);
+- `CALENDAR_SLEEP_BACKFILL_INTERVAL_SECONDS` (default 86400);
+- `CALENDAR_SLEEP_RECONCILE_ENABLED` (default true);
+- `CALENDAR_SLEEP_RECONCILE_WINDOW_DAYS` (default 7); and
+- `CALENDAR_SLEEP_RECONCILE_INTERVAL_SECONDS` (default 21600, i.e. 6 hours).
 
 Do not store the raw FluidCalendar API key in source control, Compose YAML,
 `api/.env`, prepared analytics documents, or logs. Root `.env` is ignored and

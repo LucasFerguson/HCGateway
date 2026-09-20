@@ -2,6 +2,99 @@
 
 Last updated: 2026-09-20
 
+## 2026-09-20 — Calendar-worker reconciliation closes the permanent-failure gap
+
+A real production gap: once a FluidCalendar delivery exhausted its retries
+(`permanent_failure`), nothing automatically retried it -- only a change to
+the underlying prepared event's rendered payload re-triggered delivery, and
+correct content never changes. This happened for real: FluidCalendar
+returned HTTP 500 for about 16 hours on 2026-09-19, and 9 sleep events (wake
+dates 2026-09-12 through 2026-09-19, one date with two events) landed in
+`permanent_failure` in `_calendar_sleep_deliveries`
+(`hcgateway_67fe85bc02e55009f847ff7e`). The worker's "recent scan completed"
+logs kept reporting success the entire time because they measure queueing,
+not delivery outcome -- nobody noticed until this was investigated directly
+against the live ledger.
+
+Added a periodic reconciliation pass to `calendar_worker.py`/`calendar.py`
+that checks FluidCalendar's own event list (not Google Calendar directly)
+for a bounded recent window and re-queues anything expected but not found
+there. Full design and exact matching logic are documented in
+`doc/calendar-worker-plan.md`'s new "FluidCalendar-side reconciliation"
+section; summary:
+
+- New `reconcile_window`/`maybe_run_reconciliation` in `calendar_worker.py`,
+  and new `calendar.py` primitives: `FluidCalendarClient.list_events`
+  (`GET /api/events?start=&end=` -- the documented windowed
+  `GET /api/calendar/events` 404s against the deployed FluidCalendar
+  version, discovered live while building this), `requeue_sleep_delivery`,
+  and a `claim_reconciliation`/`complete_reconciliation`/
+  `fail_reconciliation` durable lease trio (new `_calendar_sleep_reconciliations`
+  collection) mirroring the existing backfill cursor's shape so the interval
+  survives worker restarts and two instances can't double-run it.
+- Runs on its own interval, separate from the 5-minute recent-scan poll:
+  `CALENDAR_SLEEP_RECONCILE_INTERVAL_SECONDS` (default 21600s/6h),
+  `CALENDAR_SLEEP_RECONCILE_WINDOW_DAYS` (default 7),
+  `CALENDAR_SLEEP_RECONCILE_ENABLED` (default true). Added to
+  `docker-compose.yml` and `.env.example`.
+- Matching: a `delivered` row is confirmed by its stored `remoteEventId`
+  against the fetched list (a `cancelled` remote event does not count as
+  present); a `permanent_failure` row has no `remoteEventId`, so it falls
+  back to FluidCalendar's own strict `skipIfExists` fields (title/start/end/
+  description, recomputed from the current prepared event) in case the
+  create actually succeeded server-side but the ledger update was lost --
+  this path marks it found rather than requeuing a duplicate. The list
+  endpoint is not feed-scoped server-side, so results are filtered by
+  `feedId` client-side before either comparison. A row whose event cannot be
+  confirmed either way is reset via `requeue_sleep_delivery`: `attempts` to
+  0, `state` to `pending`, `remoteEventId`/`externalEventId` cleared (a
+  confirmed-missing event cannot be safely `PATCH`ed, so the next attempt
+  must `create`). Reconciliation itself never calls a FluidCalendar write
+  endpoint; redelivery happens through the normal `deliver_one` path only.
+  A truncated/paginated listing is treated as inconclusive and raised as a
+  retryable error rather than risking a false "missing" that would
+  duplicate a genuinely delivered event still sitting on a later page.
+- 15 new tests (100 total, up from 85): 2 in `test_calendar.py`
+  (`list_events`), 13 in `test_calendar_mongo.py` covering
+  `requeue_sleep_delivery`'s exact-prior-state guard, the reconciliation
+  lease's immediate-once-then-rate-limited behavior (mirroring backfill's
+  existing test), and a dedicated
+  `test_delivered_event_present_on_fluidcalendar_is_left_alone` safety test
+  plus cases for a cancelled remote event, a cross-feed id collision, a
+  content-matched orphaned success, and truncated-listing refusal. All use
+  a fake HTTP client per this project's existing pattern -- no live
+  FluidCalendar write call is ever made by a test.
+- Verified live end-to-end after `./redeploy-docker-containers.sh
+  calendar-worker analytics-worker` (both share the `hcgateway-api:local`
+  image). On the first post-deploy cycle, reconciliation correctly found
+  and requeued the 7 of 9 stuck rows that fall inside the default 7-day
+  window (wake dates 2026-09-14 through 2026-09-19); the 2 oldest
+  (2026-09-12, 2026-09-13) correctly remained untouched since they are
+  outside that window -- a real illustration that the reconciliation window
+  and the retention of older `permanent_failure` rows need to stay
+  consistent, noted below as follow-up. The 7 requeued rows were then
+  picked up by the normal delivery loop and attempted again, but
+  FluidCalendar's write path (`POST /api/events`) was still returning HTTP
+  500 at verification time even though every read endpoint checked
+  (`/api/events` GET, `/api/feeds`, `/api/stats/live`) returned 200 --
+  i.e., reconciliation correctly did its job (detect + requeue), and the
+  remaining 500s are a live external-service condition outside this
+  change's scope, left to the normal retry loop rather than forced
+  manually per the task's constraint against making write calls outside
+  the worker's own tested path.
+
+Follow-up worth doing next session: decide whether
+`CALENDAR_SLEEP_RECONCILE_WINDOW_DAYS` should default to something wider
+than the delivery lookback (or whether `permanent_failure` rows outside the
+window should be swept some other way), since the 2026-09-12/09-13 rows
+found during this incident will not be reconciled again until they either
+scroll back into a widened window or someone changes the config -- they are
+not silently lost (still visible as `permanent_failure` in the ledger), but
+also not self-healing under the current default window. Also confirm once
+FluidCalendar's write path recovers that the 7 requeued rows actually reach
+`delivered`, and re-check the 2 untouched older rows with a temporarily
+widened `CALENDAR_SLEEP_RECONCILE_WINDOW_DAYS` if they still need clearing.
+
 ## 2026-09-20 — Persisted per-workout strain detail (health-analytics-v8.4)
 
 Closed the `StrainSummary.workouts` GraphQL gap: `store.py`'s

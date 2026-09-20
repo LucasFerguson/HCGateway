@@ -154,6 +154,27 @@ class FluidCalendarClientTests(unittest.TestCase):
             client.create_event({})
         self.assertTrue(raised.exception.retryable)
 
+    def test_list_events_sends_window_params_and_returns_envelope(self):
+        body = {"events": [{"id": "remote-1"}], "window": {}, "count": 1, "hasMore": False, "truncated": False}
+        session = FakeSession(FakeResponse(200, body))
+        client = FluidCalendarClient("https://calendar.test", "secret", session=session)
+
+        result = client.list_events("2026-09-12T00:00:00Z", "2026-09-20T00:00:00Z")
+
+        self.assertEqual(result, body)
+        method, url, options = session.calls[0]
+        self.assertEqual((method, url), ("GET", "https://calendar.test/api/events"))
+        self.assertEqual(
+            options["params"], {"start": "2026-09-12T00:00:00Z", "end": "2026-09-20T00:00:00Z"}
+        )
+
+    def test_list_events_rejects_response_without_events_list(self):
+        session = FakeSession(FakeResponse(200, {"window": {}}))
+        client = FluidCalendarClient("https://calendar.test", "secret", session=session)
+        with self.assertRaises(FluidCalendarError) as raised:
+            client.list_events("2026-09-12T00:00:00Z", "2026-09-20T00:00:00Z")
+        self.assertTrue(raised.exception.retryable)
+
 
 if __name__ == "__main__":
     unittest.main()

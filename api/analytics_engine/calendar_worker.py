@@ -20,24 +20,29 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 
 from .calendar import (
+    DELIVERIES,
     FluidCalendarClient,
     FluidCalendarError,
     claim_backfill_window,
+    claim_reconciliation,
     claim_sleep_delivery,
     complete_backfill_window,
+    complete_reconciliation,
     complete_sleep_delivery,
     fail_backfill_window,
+    fail_reconciliation,
     fail_sleep_delivery,
     initialize_backfill,
     payload_hash,
     queue_sleep_delivery,
     render_sleep_event,
+    requeue_sleep_delivery,
     utcnow,
 )
 from .context import context_for_user
 from .crypto import cipher_for_user
 from .store import read_sleep_events
-from .time_utils import local_today
+from .time_utils import local_today, utc_iso
 
 
 load_dotenv()
@@ -95,6 +100,9 @@ class CalendarWorkerConfig:
     backfill_enabled: bool = False
     backfill_batch_days: int = 7
     backfill_interval_seconds: int = 86400
+    reconcile_enabled: bool = True
+    reconcile_window_days: int = 7
+    reconcile_interval_seconds: int = 21_600
 
     @classmethod
     def from_environment(cls, environment=None):
@@ -129,6 +137,13 @@ class CalendarWorkerConfig:
             ),
             backfill_interval_seconds=_positive_integer(
                 environment, "CALENDAR_SLEEP_BACKFILL_INTERVAL_SECONDS", 86400
+            ),
+            reconcile_enabled=_boolean(environment, "CALENDAR_SLEEP_RECONCILE_ENABLED", True),
+            reconcile_window_days=_positive_integer(
+                environment, "CALENDAR_SLEEP_RECONCILE_WINDOW_DAYS", 7, maximum=366
+            ),
+            reconcile_interval_seconds=_positive_integer(
+                environment, "CALENDAR_SLEEP_RECONCILE_INTERVAL_SECONDS", 21_600
             ),
         )
 
@@ -317,6 +332,136 @@ def maybe_queue_backfill(database, cipher, config, worker_id, recent_start, *, n
         return 0
 
 
+def _payload_matches_remote_event(payload, remote_event):
+    """Mirror FluidCalendar's own strict skipIfExists match (title/start/end/description).
+
+    Used only to recognize that a ``permanent_failure`` row actually landed
+    despite the error the worker recorded (e.g. the request succeeded but the
+    response was lost). Feed membership is checked by the caller, since the
+    list endpoint here is not feed-scoped server-side.
+    """
+    return (
+        remote_event.get("title") == payload.get("title")
+        and remote_event.get("start") == payload.get("start")
+        and remote_event.get("end") == payload.get("end")
+        and (remote_event.get("description") or "") == (payload.get("description") or "")
+    )
+
+
+def reconcile_window(database, cipher, client, config, start_date, end_date, *, now=None):
+    """Compare the local ledger against FluidCalendar's own event list.
+
+    This is the correctness backstop the normal delivery loop cannot provide:
+    once a delivery exhausts its retries it becomes ``permanent_failure`` and
+    nothing else re-queues it unless the underlying prepared content changes.
+    It also protects against the opposite failure mode -- a ``delivered`` row
+    whose event was somehow removed or never actually landed despite a
+    successful-looking response -- by re-checking presence rather than
+    trusting the local state alone.
+
+    Never performs a write against FluidCalendar. Only ``GET /api/events`` is
+    called here; requeued rows are picked up and actually delivered by the
+    normal ``deliver_one`` path on a later cycle.
+    """
+    now = now or utcnow()
+    ledger = database[DELIVERIES]
+    candidates = list(ledger.find({
+        "userId": str(config.user_id),
+        "feedId": str(config.feed_id),
+        "wakeDate": {"$gte": start_date.isoformat(), "$lte": end_date.isoformat()},
+        "state": {"$in": ["delivered", "permanent_failure"]},
+    }))
+    if not candidates:
+        logger.info(
+            "calendar reconciliation checked start=%s end=%s checked=0 missing=0 requeued=0",
+            start_date, end_date,
+        )
+        return {"checked": 0, "missing": 0, "requeued": 0}
+
+    # FluidCalendar's window is instant-based and end-exclusive in practice;
+    # pad a day on each side so a wake date near the boundary can't be missed
+    # due to a timezone offset between the local wake date and UTC instants.
+    window_start = utc_iso(dt.datetime.combine(start_date, dt.time.min, tzinfo=dt.timezone.utc) - dt.timedelta(days=1))
+    window_end = utc_iso(dt.datetime.combine(end_date, dt.time.min, tzinfo=dt.timezone.utc) + dt.timedelta(days=2))
+    listing = client.list_events(window_start, window_end)
+    if listing.get("truncated") or listing.get("hasMore"):
+        # A truncated page cannot prove absence. Treat this as inconclusive
+        # rather than risk requeuing (and duplicating) a genuinely delivered
+        # event that simply fell off this page.
+        raise FluidCalendarError(
+            "FluidCalendar event list was truncated/paginated; cannot reconcile safely",
+            retryable=True,
+        )
+    remote_events = [
+        e for e in listing["events"]
+        if str(e.get("feedId")) == str(config.feed_id) and e.get("status") != "cancelled"
+    ]
+    remote_by_id = {str(e["id"]): e for e in remote_events if e.get("id")}
+
+    missing = 0
+    requeued = 0
+    for delivery in candidates:
+        found = False
+        if delivery.get("remoteEventId"):
+            found = str(delivery["remoteEventId"]) in remote_by_id
+        else:
+            # No remote id was ever recorded (a delivery that failed before
+            # completion). Fall back to FluidCalendar's own strict match
+            # fields, recomputed from the current prepared event, in case the
+            # create actually succeeded server-side but the response/ledger
+            # update was lost.
+            try:
+                event, _current = _current_event(database, cipher, delivery)
+                payload = render_sleep_event(event, config.feed_id)
+                found = any(_payload_matches_remote_event(payload, e) for e in remote_events)
+            except PreparedEventUnavailable:
+                # The prepared event no longer exists in the current run at
+                # all; nothing to compare against or requeue.
+                continue
+        if found:
+            continue
+        missing += 1
+        if requeue_sleep_delivery(database, delivery, now=now):
+            requeued += 1
+            logger.warning(
+                "calendar reconciliation requeued wake_date=%s prior_state=%s remote_event_id=%s",
+                delivery.get("wakeDate"), delivery.get("state"), delivery.get("remoteEventId"),
+            )
+
+    logger.info(
+        "calendar reconciliation checked start=%s end=%s checked=%s missing=%s requeued=%s",
+        start_date, end_date, len(candidates), missing, requeued,
+    )
+    return {"checked": len(candidates), "missing": missing, "requeued": requeued}
+
+
+def maybe_run_reconciliation(database, cipher, client, config, worker_id, recent_end, *, now=None):
+    """Claim and run the periodic reconciliation pass at most once per interval."""
+    if not config.reconcile_enabled:
+        return None
+    now = now or utcnow()
+    state = claim_reconciliation(
+        database,
+        config.user_id,
+        config.feed_id,
+        worker_id,
+        interval_seconds=config.reconcile_interval_seconds,
+        lease_seconds=config.lease_seconds,
+        now=now,
+    )
+    if not state:
+        return None
+    start_date = recent_end - dt.timedelta(days=config.reconcile_window_days - 1)
+    try:
+        result = reconcile_window(database, cipher, client, config, start_date, recent_end, now=now)
+        complete_reconciliation(database, state, now=now)
+        return result
+    except Exception as error:
+        fail_reconciliation(database, state, _safe_failure(error, "calendar reconciliation"), now=now)
+        logger.warning("calendar reconciliation failed error_type=%s", type(error).__name__)
+        return None
+
+
 def run_cycle(database, cipher, client, config, worker_id, user, *, now=None):
     """Scan current prepared data, optionally queue one backfill, then drain due work."""
     now = now or utcnow()
@@ -336,6 +481,9 @@ def run_cycle(database, cipher, client, config, worker_id, user, *, now=None):
         )
         maybe_queue_backfill(
             database, cipher, config, worker_id, recent_start, now=now
+        )
+        maybe_run_reconciliation(
+            database, cipher, client, config, worker_id, recent_end, now=now
         )
     else:
         logger.info("calendar recent scan deferred because no prepared run exists")

@@ -19,6 +19,7 @@ from .time_utils import utc_iso
 
 DELIVERIES = "_calendar_sleep_deliveries"
 BACKFILLS = "_calendar_sleep_backfills"
+RECONCILIATIONS = "_calendar_sleep_reconciliations"
 DISPLAY_STAGES = (
     ("light", "Light"),
     ("deep", "Deep"),
@@ -148,13 +149,14 @@ class FluidCalendarClient:
         self.session = session or requests.Session()
         self.headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    def _request(self, method, path, payload, success_statuses):
+    def _request(self, method, path, payload, success_statuses, *, params=None):
         try:
             response = self.session.request(
                 method,
                 self.base_url + path,
                 headers=self.headers,
                 json=payload,
+                params=params,
                 timeout=self.timeout,
             )
         except requests.RequestException as error:
@@ -182,6 +184,22 @@ class FluidCalendarClient:
         update = {key: value for key, value in payload.items() if key != "skipIfExists"}
         return self._request("PATCH", "/api/events/" + quote(str(event_id), safe=""), update, {200})
 
+    def list_events(self, start, end):
+        """Read-only windowed event list, used only for reconciliation checks.
+
+        ``start``/``end`` are ISO 8601 UTC instants. Never called for delivery;
+        this is a GET and never mutates FluidCalendar state. The response
+        envelope is ``{events, window, count, hasMore, truncated}``; callers
+        must treat a truncated/paginated result as inconclusive rather than
+        proof that an event is missing.
+        """
+        result = self._request(
+            "GET", "/api/events", None, {200}, params={"start": start, "end": end}
+        )
+        if not isinstance(result.get("events"), list):
+            raise FluidCalendarError("FluidCalendar event list response is missing events", retryable=True)
+        return result
+
 
 def _scope_id(user_id, feed_id):
     value = json.dumps([str(user_id), str(feed_id)], separators=(",", ":")).encode("utf-8")
@@ -203,6 +221,7 @@ def ensure_calendar_indexes(database):
         [("userId", ASCENDING), ("feedId", ASCENDING), ("preparedEventId", ASCENDING)], unique=True
     )
     database[BACKFILLS].create_index([("userId", ASCENDING), ("feedId", ASCENDING)], unique=True)
+    database[RECONCILIATIONS].create_index([("userId", ASCENDING), ("feedId", ASCENDING)], unique=True)
 
 
 def queue_sleep_delivery(database, user_id, feed_id, event, analytics_run_id, payload, *, now=None):
@@ -330,6 +349,45 @@ def fail_sleep_delivery(
     return result.modified_count == 1
 
 
+def requeue_sleep_delivery(database, delivery, *, now=None):
+    """Reset a ledger row so the normal delivery loop retries it immediately.
+
+    Used by reconciliation when the expected event cannot be confirmed on
+    FluidCalendar's side: a ``permanent_failure`` row whose retries were
+    exhausted, or a ``delivered`` row whose event turned out to be missing
+    despite the optimistic local state. Attempts and error state are cleared
+    so this does not immediately re-exhaust into ``permanent_failure``; the
+    stored ``remoteEventId``/``externalEventId`` are cleared too, since a
+    confirmed-missing event cannot be safely PATCHed back into existence and
+    the next delivery must create a new one. Does not touch a row currently
+    ``delivering`` or already ``pending``/``retryable`` under an active lease,
+    matched by requiring the exact prior state passed in.
+    """
+    now = now or utcnow()
+    result = database[DELIVERIES].update_one(
+        {"_id": delivery["_id"], "state": delivery["state"]},
+        {
+            "$set": {
+                "state": "pending",
+                "operation": "create",
+                "attempts": 0,
+                "nextAttemptAt": now,
+                "reconciledAt": now,
+            },
+            "$unset": {
+                "error": "",
+                "failedAt": "",
+                "workerId": "",
+                "leaseUntil": "",
+                "remoteEventId": "",
+                "externalEventId": "",
+                "deliveredAt": "",
+            },
+        },
+    )
+    return result.modified_count == 1
+
+
 def initialize_backfill(database, user_id, feed_id, next_end_date, *, now=None):
     """Create, but never rewind, the per-user/feed backward cursor."""
     ensure_calendar_indexes(database)
@@ -398,6 +456,71 @@ def fail_backfill_window(database, state, error, *, now=None):
         {
             "$set": {
                 "status": "ready", "failedAt": now, "updatedAt": now,
+                "error": {"type": type(error).__name__, "message": str(error)[:500]},
+            },
+            "$unset": {"workerId": "", "leaseUntil": ""},
+        },
+    )
+    return result.modified_count == 1
+
+
+def claim_reconciliation(database, user_id, feed_id, worker_id, *, interval_seconds, lease_seconds=300, now=None):
+    """Claim the periodic reconciliation slot for one user/feed, or return None.
+
+    A durable per-scope timestamp (rather than an in-process timer) so the
+    interval survives worker restarts/redeploys: a fresh container does not
+    immediately re-run reconciliation just because its own in-memory clock
+    reset. Mirrors the backfill cursor's lease shape so two worker instances
+    cannot run reconciliation for the same scope concurrently.
+    """
+    ensure_calendar_indexes(database)
+    now = now or utcnow()
+    identity = _scope_id(user_id, feed_id)
+    database[RECONCILIATIONS].update_one(
+        {"_id": identity},
+        {"$setOnInsert": {
+            "userId": str(user_id), "feedId": str(feed_id), "status": "ready",
+            "lastRunAt": None, "createdAt": now,
+        }},
+        upsert=True,
+    )
+    due_query = {
+        "_id": identity,
+        "$or": [
+            {"status": "ready", "lastRunAt": None},
+            {"status": "ready", "lastRunAt": {"$lte": now - dt.timedelta(seconds=interval_seconds)}},
+            {"status": "running", "leaseUntil": {"$lt": now}},
+        ],
+    }
+    return database[RECONCILIATIONS].find_one_and_update(
+        due_query,
+        {"$set": {
+            "status": "running", "workerId": str(worker_id), "startedAt": now,
+            "leaseUntil": now + dt.timedelta(seconds=lease_seconds),
+        }},
+        return_document=ReturnDocument.AFTER,
+    )
+
+
+def complete_reconciliation(database, state, *, now=None):
+    now = now or utcnow()
+    result = database[RECONCILIATIONS].update_one(
+        {"_id": state["_id"], "status": "running", "workerId": state.get("workerId")},
+        {
+            "$set": {"status": "ready", "lastRunAt": now},
+            "$unset": {"workerId": "", "leaseUntil": ""},
+        },
+    )
+    return result.modified_count == 1
+
+
+def fail_reconciliation(database, state, error, *, now=None):
+    now = now or utcnow()
+    result = database[RECONCILIATIONS].update_one(
+        {"_id": state["_id"], "status": "running", "workerId": state.get("workerId")},
+        {
+            "$set": {
+                "status": "ready", "failedAt": now,
                 "error": {"type": type(error).__name__, "message": str(error)[:500]},
             },
             "$unset": {"workerId": "", "leaseUntil": ""},
