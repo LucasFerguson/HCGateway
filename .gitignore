@@ -94,5 +94,8 @@ service-account.json
 # Ignore the log files themselves but keep the folder's README tracked.
 build-logs/*.log
 
+# Timestamped APK copies created by build-android-apk-on-linux.sh.
+releases/
+
 # graphql-api build output (compiled by `npm run build` / the Dockerfile).
 graphql-api/dist/
