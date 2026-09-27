@@ -17,7 +17,7 @@ For the current implementation checkpoint and recommended next work, start with
 
 - [x] **Backend analytics engine.** Ported the dashboard's
   `health-analytics-v6` TypeScript behavior to Python and extended it as
-  `health-analytics-v8.4`, including multi-device
+  `health-analytics-v8.5`, including multi-device
   sleep reconciliation, daily metrics, sleep debt/consistency, and experimental
   healthspan, Recovery, and cardiovascular strain estimates. Recovery and strain
   are provisional, non-clinical heuristics with explicit quality gates and TODOs

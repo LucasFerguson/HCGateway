@@ -1,4 +1,4 @@
-"""Health analytics v8.2: reusable sleep preparation plus Recovery and Strain v2.1."""
+"""Health analytics v8.5: prepared health views plus provisional Recovery and Strain."""
 
 import datetime as dt
 import hashlib
@@ -23,7 +23,7 @@ from .strain import calculate_strain
 from .time_utils import date_key, local_minute_of_day, parse_instant, split_by_local_day
 
 
-ALGORITHM_VERSION = "health-analytics-v8.4"
+ALGORITHM_VERSION = "health-analytics-v8.5"
 HEALTHSPAN_MODEL_VERSION = "experimental-healthspan-v1"
 DAY_SECONDS = 86_400
 YEAR_DAYS = 365.2425

@@ -857,10 +857,18 @@ export const typeDefs = /* GraphQL */ `
   type RecoveryDayQuality {
     publishable: Boolean!
     complete: Boolean!
+    estimateBasis: RecoveryEstimateBasis!
     availableWeight: Float!
     baselineWindowDays: Int!
     minimumBaselineDays: Int!
     reasons: [String!]!
+  }
+
+  enum RecoveryEstimateBasis {
+    COMPLETE
+    PHYSIOLOGY_PARTIAL
+    SLEEP_CONSISTENCY_PARTIAL
+    INSUFFICIENT_DATA
   }
 
   type RecoveryQuality {

@@ -2,7 +2,7 @@
 
 HCGateway keeps encrypted Health Connect records as its source of truth. A
 separate Python worker decrypts the supported analytics signals, normalizes
-them, runs `health-analytics-v8.4`, and writes encrypted, immutable
+them, runs `health-analytics-v8.5`, and writes encrypted, immutable
 prepared runs back to each user's MongoDB database.
 
 The implementation is a behavioral port of the dashboard repository's
@@ -50,13 +50,20 @@ The day contract includes:
 - explicit placeholders for strain target, schedule blocks, missing HRV,
   skin-temperature deviation, and bed/wake preferences.
 
-Recovery v1 is a provisional, non-clinical heuristic. It combines sleep duration
+Recovery v1.1 is a provisional, non-clinical heuristic. It combines sleep duration
 (30%), HRV change from a trailing 28-day personal median (35%), resting-heart-rate
 change from its trailing median (25%), and sleep consistency (10%). At least seven
-prior days establish each physiological baseline. Missing components are reweighted,
-but a score requires sleep plus either calibrated RHR or HRV; a score without HRV is
-explicitly `partial`. The weights and response curves are intentionally flagged for
-future validation and must not be represented as a proprietary wearable score.
+prior days establish each physiological baseline. Missing components are reweighted.
+When physiology is absent, sleep plus a calibrated consistency score may publish a
+sleep-based fallback (75% sleep and 25% consistency after reweighting), explicitly
+labeled `sleep_consistency_partial`. Sleep alone remains insufficient. Every score
+without HRV is `partial`. The weights and response curves are intentionally flagged
+for future validation and must not be represented as a proprietary wearable score.
+A Recovery day's GraphQL `quality.estimateBasis` is the display-safe distinction:
+`COMPLETE` uses every component, `PHYSIOLOGY_PARTIAL` includes at least one
+physiological component, `SLEEP_CONSISTENCY_PARTIAL` is the non-physiological
+fallback and should be labeled “Sleep-based estimate,” and `INSUFFICIENT_DATA`
+must retain a null score rather than becoming zero.
 A missing value is represented by a status and reason, never by a numeric zero.
 
 ### `GET /api/v2/analytics/snapshot`
@@ -70,7 +77,7 @@ dashboard contract unchanged:
   "source": "health-connect",
   "sleepSessions": [],
   "analytics": {
-    "algorithmVersion": "health-analytics-v8.4",
+    "algorithmVersion": "health-analytics-v8.5",
     "timeZone": "America/Chicago",
     "sourceFingerprint": "...",
     "configurationFingerprint": "...",
@@ -110,7 +117,7 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
 
 ```json
 {
-  "runId": "health-analytics-v8.4:<source>:<configuration>",
+  "runId": "health-analytics-v8.5:<source>:<configuration>",
   "count": 1,
   "days": [
     {
@@ -192,9 +199,10 @@ Sync uploads and database-side deletes automatically queue a debounced run.
   It uses available sleep, steps, resting-heart-rate, and weight factors; a
   birth date is required for age-based outputs.
 - Recovery is an explicitly provisional, non-clinical readiness estimate. Complete
-  scores require sleep, HRV, RHR, and sleep consistency; partial scores may use sleep
-  plus a calibrated RHR baseline while HRV is absent. Its heuristic weights and curves
-  remain a documented future-validation task.
+  scores require sleep, HRV, RHR, and sleep consistency. Partial scores may use sleep
+  plus calibrated RHR, or the explicitly sleep-based sleep-plus-consistency fallback,
+  while HRV is absent. Its heuristic weights and curves remain a documented
+  future-validation task.
 - Strain is an explicitly provisional, non-proprietary cardiovascular estimate. It
   integrates gap-limited heart-rate effort and logarithmically maps load to
   0–21. Empirical calibration may now publish with `low` confidence when a substantial

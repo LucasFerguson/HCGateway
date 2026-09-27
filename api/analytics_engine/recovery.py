@@ -10,18 +10,20 @@ import datetime as dt
 from statistics import median
 
 
-ALGORITHM_VERSION = "experimental-recovery-v1"
+ALGORITHM_VERSION = "experimental-recovery-v1.1"
 BASELINE_WINDOW_DAYS = 28
 MINIMUM_BASELINE_DAYS = 7
 METHODOLOGY = (
     "Provisional, non-clinical readiness estimate. Sleep duration contributes 30%, "
     "HRV deviation from a trailing personal median contributes 35%, resting-heart-rate "
-    "deviation contributes 25%, and sleep consistency contributes 10%. Missing optional "
-    "components are reweighted, and scores without HRV remain partial."
+    "deviation contributes 25%, and sleep consistency contributes 10%. Missing components "
+    "are reweighted. Sleep plus consistency may publish a sleep-based fallback when no "
+    "physiological component is available; all scores without HRV remain partial."
 )
 LIMITATIONS = [
     "The model weights and response curves are heuristic and have not been clinically validated.",
     "A partial score without HRV is less sensitive to autonomic recovery and illness.",
+    "A sleep-and-consistency-only fallback is not a physiological recovery measurement.",
     "Device changes, alcohol, medication, travel, and recording conditions can shift personal baselines.",
     "TODO: validate weights, minimum baselines, and outcome calibration on longitudinal personal data.",
 ]
@@ -131,11 +133,26 @@ def calculate_recovery(daily_sleep, resting_heart_rate, sleep_consistency,
         available_weight = sum(WEIGHTS[name] for name in components)
         has_sleep = "sleep" in components
         has_physiology = "hrv" in components or "restingHeartRate" in components
-        publishable = has_sleep and has_physiology and available_weight >= 0.50
+        has_consistency = "sleepConsistency" in components
+        # v1.1 fallback: a sleep day with a calibrated consistency score is
+        # useful enough to display as a provisional estimate even when Health
+        # Connect did not provide daily RHR/HRV. It remains explicitly partial
+        # and its basis prevents clients from presenting it as physiological
+        # readiness. Sleep alone still cannot publish a Recovery number.
+        publishable = has_sleep and (has_physiology or has_consistency) and available_weight >= 0.40
         score = None
         if publishable:
             score = round(sum(WEIGHTS[name] * item["score"] for name, item in components.items()) / available_weight)
         complete = publishable and set(components) == set(WEIGHTS)
+        if complete:
+            estimate_basis = "complete"
+        elif publishable and has_physiology:
+            estimate_basis = "physiology_partial"
+        elif publishable:
+            estimate_basis = "sleep_consistency_partial"
+            reasons.append("physiology_missing_sleep_consistency_estimate")
+        else:
+            estimate_basis = "insufficient_data"
         daily.append({
             "date": date,
             "score": score,
@@ -146,6 +163,7 @@ def calculate_recovery(daily_sleep, resting_heart_rate, sleep_consistency,
             "quality": {
                 "publishable": publishable,
                 "complete": complete,
+                "estimateBasis": estimate_basis,
                 "availableWeight": round(available_weight, 2),
                 "baselineWindowDays": BASELINE_WINDOW_DAYS,
                 "minimumBaselineDays": MINIMUM_BASELINE_DAYS,
@@ -168,6 +186,6 @@ def calculate_recovery(daily_sleep, resting_heart_rate, sleep_consistency,
             "available": bool(publishable_days),
             "publishableDayCount": len(publishable_days),
             "completeDayCount": sum(item["status"] == "available" for item in daily),
-            "reasons": [] if publishable_days else ["no_day_has_sleep_and_a_calibrated_physiological_baseline"],
+            "reasons": [] if publishable_days else ["no_day_has_enough_recovery_components"],
         },
     }

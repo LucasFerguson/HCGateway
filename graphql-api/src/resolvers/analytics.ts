@@ -906,6 +906,7 @@ function strainWorkoutIdentity(workout: Record<string, unknown>): string {
 }
 
 function recoveryDay(raw: Record<string, unknown>) {
+  const quality = (raw.quality as Record<string, unknown> | undefined) ?? {};
   return {
     date: raw.date,
     score: raw.score ?? null,
@@ -913,7 +914,10 @@ function recoveryDay(raw: Record<string, unknown>) {
     status: raw.status,
     provisional: raw.provisional,
     components: raw.components ?? {},
-    quality: raw.quality,
+    quality: {
+      ...quality,
+      estimateBasis: String(quality.estimateBasis ?? "insufficient_data").toUpperCase(),
+    },
   };
 }
 

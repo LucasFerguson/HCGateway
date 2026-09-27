@@ -143,6 +143,7 @@ describe("prepared analytics GraphQL contract", () => {
             quality: {
               publishable: true,
               complete: true,
+              estimateBasis: "complete",
               availableWeight: 1,
               baselineWindowDays: 30,
               minimumBaselineDays: 7,
@@ -251,7 +252,7 @@ describe("prepared analytics GraphQL contract", () => {
         weight { unit daily { id } }
         heartRateVariability { unit }
         strain { daily { id date } }
-        recovery { daily { id date } }
+        recovery { daily { id date quality { estimateBasis } } }
       } }
     }`);
 
@@ -289,6 +290,7 @@ describe("prepared analytics GraphQL contract", () => {
     expect(analytics.steps.monthly[0].id).toBe(`${identityPrefix}:steps:2026-01`);
     expect(analytics.strain.daily[0].id).toBe(`${identityPrefix}:${date}`);
     expect(analytics.recovery.daily[0].id).toBe(`${identityPrefix}:${date}`);
+    expect(analytics.recovery.daily[0].quality.estimateBasis).toBe("COMPLETE");
   });
 
   it("serializes prepared day sleep-stage kinds as GraphQL enums", async () => {

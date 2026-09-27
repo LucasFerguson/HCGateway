@@ -26,10 +26,13 @@ class RecoveryTests(unittest.TestCase):
         result = calculate_recovery(sleep, resting, consistency, 480)
         self.assertEqual(result["algorithmVersion"], ALGORITHM_VERSION)
         self.assertEqual(result["status"], "partial")
-        self.assertEqual(result["daily"][6]["status"], "insufficient_data")
+        fallback = result["daily"][6]
+        self.assertEqual(fallback["status"], "partial")
+        self.assertEqual(fallback["quality"]["estimateBasis"], "sleep_consistency_partial")
         scored = result["daily"][7]
         self.assertEqual(scored["status"], "partial")
         self.assertIsNotNone(scored["score"])
+        self.assertEqual(scored["quality"]["estimateBasis"], "physiology_partial")
         self.assertIn("hrv_missing", scored["quality"]["reasons"])
         self.assertTrue(scored["provisional"])
 
@@ -44,6 +47,22 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(scored["components"]["restingHeartRate"]["baseline"], 55)
         self.assertEqual(scored["components"]["hrv"]["baseline"], 50)
         self.assertLess(scored["score"], 80)
+
+    def test_sleep_and_consistency_publish_a_clearly_labeled_fallback(self):
+        sleep, _, consistency, _ = days()
+        result = calculate_recovery(sleep, [], consistency, 480)
+        scored = result["daily"][-1]
+        self.assertEqual(scored["status"], "partial")
+        self.assertEqual(scored["score"], 95)
+        self.assertEqual(scored["quality"]["estimateBasis"], "sleep_consistency_partial")
+        self.assertEqual(scored["quality"]["availableWeight"], 0.4)
+        self.assertIn("physiology_missing_sleep_consistency_estimate", scored["quality"]["reasons"])
+
+    def test_sleep_alone_still_does_not_claim_recovery(self):
+        sleep, _, _, _ = days()
+        result = calculate_recovery(sleep, [], [], 480)
+        self.assertTrue(all(item["score"] is None for item in result["daily"]))
+        self.assertTrue(all(item["quality"]["estimateBasis"] == "insufficient_data" for item in result["daily"]))
 
     def test_sleep_and_physiology_are_both_required(self):
         _, resting, consistency, _ = days()
