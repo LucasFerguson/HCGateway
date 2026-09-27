@@ -15,6 +15,11 @@ CSV = """Cycle start time,Cycle end time,Cycle timezone,Question text,Answered y
 2026-01-02 23:30:00,2026-01-03 07:30:00,UTC-06:00,Consumed caffeine?,false,
 """
 
+CSV_WITH_OPEN_CYCLE = """Cycle start time,Cycle end time,Cycle timezone,Question text,Answered yes,Notes
+2026-09-26 07:00:00,2026-09-27 07:00:00,UTC-05:00,Consumed caffeine?,true,
+2026-09-27 07:00:00,,UTC-05:00,Consumed caffeine?,false,
+"""
+
 
 class WhoopJournalParsingTests(unittest.TestCase):
     def test_preserves_local_cycle_and_converts_offset_to_utc(self):
@@ -64,7 +69,7 @@ class WhoopJournalMongoTests(unittest.TestCase):
         first = import_csv(self.database, io.StringIO(CSV), "2026-08-24", imported_at)
         second = import_csv(self.database, io.StringIO(CSV), "2026-08-24", imported_at)
 
-        self.assertEqual(first, {"rows": 3, "definitions": 2})
+        self.assertEqual(first, {"rows": 3, "definitions": 2, "skippedIncompleteRows": 0})
         self.assertEqual(second, first)
         self.assertEqual(self.database[ENTRIES].count_documents({}), 3)
         self.assertEqual(self.database[DEFINITIONS].count_documents({}), 2)
@@ -77,6 +82,19 @@ class WhoopJournalMongoTests(unittest.TestCase):
         self.assertEqual(response["questionId"], caffeine["id"])
         self.assertEqual(response["storageFormat"], "plain-bson-v1")
         self.assertIn("cycleEndAt_1_questionId_1", self.database[ENTRIES].index_information())
+
+    def test_import_skips_answers_from_an_open_cycle(self):
+        result = import_csv(
+            self.database,
+            io.StringIO(CSV_WITH_OPEN_CYCLE),
+            "2026-09-27",
+            datetime(2026, 9, 27, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(result, {"rows": 1, "definitions": 1, "skippedIncompleteRows": 1})
+        self.assertEqual(self.database[ENTRIES].count_documents({}), 1)
+        definition = self.database[DEFINITIONS].find_one({"question": "Consumed caffeine?"})
+        self.assertEqual(definition["lastSeenDate"], "2026-09-27")
 
 
 if __name__ == "__main__":

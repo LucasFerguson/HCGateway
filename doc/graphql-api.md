@@ -62,6 +62,10 @@ source local cycle timestamps, canonical UTC instants, local end date, source
 UTC offset, and optional notes.
 
 Imports are idempotent and run separately from the read-only GraphQL service.
+WHOOP may include answers from the currently open cycle without a cycle-end
+timestamp. The importer reports and skips those incomplete rows because they
+cannot yet be assigned to a day; a later export will import them after WHOOP
+closes the cycle.
 After rebuilding the Python image, import an export from the repository root:
 
 ```bash

@@ -115,7 +115,15 @@ def import_csv(database, stream, source_export_date, imported_at=None):
         raise ValueError(f"CSV is missing columns: {', '.join(sorted(missing))}")
 
     parsed_entries = {}
+    skipped_incomplete_rows = 0
     for row_number, row in enumerate(reader, start=2):
+        # WHOOP can include journal answers for the currently open cycle. Those
+        # rows have no cycle end yet, so they cannot be assigned to a local day
+        # or exposed through the range-based GraphQL contract. A later export
+        # will contain the same answers with a completed cycle end.
+        if not (row.get("Cycle end time") or "").strip():
+            skipped_incomplete_rows += 1
+            continue
         entry = parse_row(row, row_number)
         entry["sourceExportDate"] = source_export_date
         entry["importedAt"] = imported_at
@@ -165,6 +173,7 @@ def import_csv(database, stream, source_export_date, imported_at=None):
     return {
         "rows": len(operations),
         "definitions": len(definition_operations),
+        "skippedIncompleteRows": skipped_incomplete_rows,
     }
 
 
@@ -186,7 +195,11 @@ def main(argv=None):
             raise SystemExit(f"No HCGateway user found for username {args.username!r}")
         database = client[f"hcgateway_{user['_id']}"]
         result = import_csv(database, sys.stdin, args.source_export_date)
-        print(f"Imported {result['rows']} WHOOP journal rows across {result['definitions']} questions.")
+        print(
+            f"Imported {result['rows']} WHOOP journal rows across "
+            f"{result['definitions']} questions; skipped "
+            f"{result['skippedIncompleteRows']} incomplete current-cycle rows."
+        )
     finally:
         client.close()
 
