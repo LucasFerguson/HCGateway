@@ -97,7 +97,7 @@ messaging().onMessage(remoteMessage => {
 let login;
 let authStateListener = null;
 // let apiBase = 'https://api.hcgateway.shuchir.dev'; // need to change this - Lucas 2025-04-01
-let apiBase = 'http://192.168.8.239:6644/'; // need to change this - Lucas 2025-04-01
+let apiBase = 'http://192.168.8.239:6644'; // need to change this - Lucas 2025-04-01
 let lastSync = null;
 let lastSuccessfulSyncAt = null;
 let lastSyncAttemptAt = null;
@@ -900,6 +900,7 @@ const runSync = async (customStartTime, customEndTime) => {
 
 const handlePush = async (message) => {
   const isInitialized = await initialize();
+  if (!isInitialized) return;
 
   let data = JSON.parse(message.data);
   console.log(data);
@@ -922,11 +923,13 @@ const handlePush = async (message) => {
 
 const handleDel = async (message) => {
   const isInitialized = await initialize();
+  if (!isInitialized) return;
 
   let data = JSON.parse(message.data);
   console.log(data);
 
   deleteRecordsByUuids(data.recordType, data.uuids, data.uuids)
+    .catch(err => console.log('deleteRecordsByUuids failed', err));
   axios.delete(`${apiBase}/api/v2/sync/${data.recordType}`, {
     data: {
       uuid: data.uuids,
@@ -934,7 +937,7 @@ const handleDel = async (message) => {
     headers: {
       "Authorization": `Bearer ${login}`
     }
-  })
+  }).catch(err => console.log('server delete failed', err));
 }
 
 
@@ -1032,7 +1035,11 @@ export default Sentry.wrap(function App() {
         const session = await loadAuthSession();
         if (session.token) setActiveLogin(session.token);
         if (session.refresh) {
-          await refreshTokenFunc({ refreshToken: session.refresh });
+          // Refresh in the background — don't block the UI on a network call.
+          // clearAuthSession (on 401/403) will call setActiveLogin(null) if the
+          // token is genuinely expired, which will flip the UI to the login screen.
+          refreshTokenFunc({ refreshToken: session.refresh })
+            .catch(err => console.log('Background token refresh failed', err));
         }
       } catch (err) {
         console.log('Failed to restore saved session', err);
@@ -1536,7 +1543,6 @@ export default Sentry.wrap(function App() {
             <Text style={{ fontSize: 15 }}>Enable Sentry:</Text>
             <Switch
               value={isSentryEnabled}
-              defaultValue={isSentryEnabled}
               onValueChange={async (value) => {
                 if (value) {
                   Sentry.init({

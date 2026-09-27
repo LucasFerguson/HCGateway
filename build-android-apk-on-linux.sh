@@ -131,6 +131,15 @@ else
   warn "@supersami/rn-foreground-service not found — did npm install run?"
 fi
 
+# Release keystore
+RELEASE_KS="$ANDROID_DIR/app/release.keystore"
+if [ -f "$RELEASE_KS" ]; then
+  ok "release.keystore present"
+else
+  fail "release.keystore missing — ${RELEASE_KS#$REPO_ROOT/}"
+  PROBLEMS+=("Generate it: keytool -genkeypair -keystore app/android/app/release.keystore -alias hcgateway-release -keyalg RSA -keysize 2048 -validity 10000 -storepass hcgateway_release_store -dname 'CN=HCGateway,O=LucasFerguson,C=US'")
+fi
+
 # gradlew executable
 if [ -x "$ANDROID_DIR/gradlew" ]; then
   ok "gradlew is executable"
@@ -192,13 +201,29 @@ BUILD_RC="${PIPESTATUS[0]}"
 echo | tee -a "$LOG_FILE"
 if [ "$BUILD_RC" -eq 0 ]; then
   APK="$ANDROID_DIR/app/build/outputs/apk/release/app-release.apk"
+  RELEASES_DIR="$REPO_ROOT/releases"
+  mkdir -p "$RELEASES_DIR"
+  if [ -f "$APK" ]; then
+    RELEASE_COPY="$RELEASES_DIR/app-release_${STAMP}.apk"
+    cp "$APK" "$RELEASE_COPY"
+  fi
   {
     echo "=========================================================="
     echo "RESULT: SUCCESS (exit $BUILD_RC)"
     [ -f "$APK" ] && echo "APK: ${APK#$REPO_ROOT/} ($(du -h "$APK" | cut -f1))"
+    [ -n "${RELEASE_COPY:-}" ] && echo "Copy: ${RELEASE_COPY#$REPO_ROOT/}"
   } | tee -a "$LOG_FILE"
   echo "${BLD}${GRN}==> Build succeeded.${RST}"
-  [ -f "$APK" ] && echo "  APK: ${APK#$REPO_ROOT/}"
+  [ -f "$APK" ] && echo "  APK:  ${APK#$REPO_ROOT/}"
+  [ -n "${RELEASE_COPY:-}" ] && echo "  Copy: ${RELEASE_COPY#$REPO_ROOT/}"
+  echo
+  echo "${BLD}Installing on Samsung (One UI):${RST}"
+  echo "  1. Upload the APK above to Google Drive."
+  echo "  2. On your phone, open drive.google.com in Chrome — do NOT use the Drive app."
+  echo "  3. Download the file so it lands in your local Downloads folder."
+  echo "  4. Open the Samsung 'My Files' app, go to Downloads, tap the APK."
+  echo "  5. If you get 'problem parsing the package': free up storage and retry."
+  echo "     The APK is ~69 MB but Android needs extra headroom to unpack during install."
 else
   {
     echo "=========================================================="
