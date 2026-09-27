@@ -80,6 +80,7 @@ export interface DailyDocument extends Document {
   heartRateVariability?: unknown;
   weight?: unknown;
   strain?: unknown;
+  strainWorkouts?: unknown;
   recovery?: unknown;
   dayView?: Record<string, unknown> | null;
 }

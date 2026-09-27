@@ -45,6 +45,20 @@ type Viewer {
 See `graphql-api/src/schema/typeDefs.ts` for the complete SDL - it is the
 source of truth; this document is a pointer, not a duplicate.
 
+The analytics root and date/month-keyed analytics buckets expose stable cache
+identities scoped by authenticated account and prepared run. Shared metric
+types additionally include the metric key, so (for example) steps and weight
+on the same date cannot collide in Apollo's cache. These new IDs are opaque
+client identities, not MongoDB record IDs. Existing IDs on source/business
+objects such as sleep events and workouts retain their established meaning;
+clients should keep their cache policy explicit for those types.
+
+Closed analytics values that drive presentation are GraphQL enums rather than
+free-form strings: healthspan status, healthspan factor key/unit, and metric
+unit. Their wire values use GraphQL's uppercase convention (`READY`,
+`RESTING_HEART_RATE`, `BPM`, `MS`, and so on), while the persisted Python
+analytics representation remains lowercase.
+
 ## Safety model (all env-configurable, see `graphql-api/.env.example`)
 
 - No pagination; time ranges are optional everywhere they're accepted
@@ -159,6 +173,8 @@ curl -s -X POST http://localhost:6645/graphql \
 ```
 
 Tests: `cd graphql-api && npm test` (Vitest + `mongodb-memory-server`, no
-Docker required) - covers tenant isolation, missing-data representation, and
-the depth/alias/complexity limiter rejecting pathological queries. These are
-separate from and not part of the Python `python -m unittest discover` suite.
+Docker required) - covers tenant isolation, missing-data representation,
+prepared-contract enums/cache identities, persisted workout deduplication,
+typed sleep breakdowns, and the depth/alias/complexity limiter rejecting
+pathological queries. These are separate from and not part of the Python
+`python -m unittest discover` suite.

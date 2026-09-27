@@ -422,7 +422,52 @@ function consistencyCategory(raw: unknown) {
   return raw ? String(raw).toUpperCase() : null;
 }
 
+function analyticsNodePrefix(context: GraphQLContext): string {
+  return `${context.user.userId}:${requireRunId(context)}`;
+}
+
+function datedNodeId(context: GraphQLContext, parent: { date: unknown }): string {
+  return `${analyticsNodePrefix(context)}:${String(parent.date)}`;
+}
+
+function metricNodeId(
+  context: GraphQLContext,
+  parent: { __metricKey?: unknown; date?: unknown; month?: unknown },
+): string {
+  const bucket = parent.date ?? parent.month;
+  return `${analyticsNodePrefix(context)}:${String(parent.__metricKey)}:${String(bucket)}`;
+}
+
+function withMetricKey(raw: unknown, metricKey: string): Record<string, unknown> | null {
+  if (!raw || typeof raw !== "object") return null;
+  return { ...(raw as Record<string, unknown>), __metricKey: metricKey };
+}
+
 export const analyticsResolvers = {
+  HealthspanStatus: {
+    CALIBRATING: "calibrating",
+    PARTIAL: "partial",
+    READY: "ready",
+  },
+  HealthspanFactorKey: {
+    SLEEP_DURATION: "sleep_duration",
+    SLEEP_CONSISTENCY: "sleep_consistency",
+    STEPS: "steps",
+    RESTING_HEART_RATE: "resting_heart_rate",
+  },
+  HealthspanFactorUnit: {
+    MINUTES: "minutes",
+    PERCENT: "percent",
+    STEPS: "steps",
+    BPM: "bpm",
+  },
+  MetricUnit: {
+    STEPS: "steps",
+    KCAL: "kcal",
+    BPM: "bpm",
+    KG: "kg",
+    MS: "ms",
+  },
   Viewer: {
     analytics: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       // Pin runId once per request here, per the design doc's Viewer
@@ -438,6 +483,7 @@ export const analyticsResolvers = {
     },
   },
   Analytics: {
+    id: (_parent: unknown, _args: unknown, context: GraphQLContext) => analyticsNodePrefix(context),
     runId: (_parent: unknown, _args: unknown, context: GraphQLContext) => requireRunId(context),
     algorithmVersion: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       const meta = await context.withTimeout(readCurrentMetadata(context.userDb), "analytics.algorithmVersion");
@@ -542,6 +588,52 @@ export const analyticsResolvers = {
       return recoverySummary(summary, runId, context);
     },
   },
+  Day: {
+    id: (parent: { date: unknown }, _args: unknown, context: GraphQLContext) => datedNodeId(context, parent),
+  },
+  SleepDebtDay: {
+    id: (parent: { date: unknown }, _args: unknown, context: GraphQLContext) => datedNodeId(context, parent),
+  },
+  SleepConsistencyDay: {
+    id: (parent: { date: unknown }, _args: unknown, context: GraphQLContext) => datedNodeId(context, parent),
+  },
+  HealthspanDay: {
+    id: (parent: { date: unknown }, _args: unknown, context: GraphQLContext) => datedNodeId(context, parent),
+  },
+  HealthspanFactor: {
+    id: (
+      parent: { __date: unknown; key: unknown },
+      _args: unknown,
+      context: GraphQLContext,
+    ) => `${analyticsNodePrefix(context)}:${String(parent.__date)}:${String(parent.key)}`,
+  },
+  MetricDay: {
+    id: (
+      parent: { __metricKey?: unknown; date?: unknown },
+      _args: unknown,
+      context: GraphQLContext,
+    ) => metricNodeId(context, parent),
+  },
+  RollingPoint: {
+    id: (
+      parent: { __metricKey?: unknown; date?: unknown },
+      _args: unknown,
+      context: GraphQLContext,
+    ) => metricNodeId(context, parent),
+  },
+  MonthlyPoint: {
+    id: (
+      parent: { __metricKey?: unknown; month?: unknown },
+      _args: unknown,
+      context: GraphQLContext,
+    ) => metricNodeId(context, parent),
+  },
+  StrainDay: {
+    id: (parent: { date: unknown }, _args: unknown, context: GraphQLContext) => datedNodeId(context, parent),
+  },
+  RecoveryDay: {
+    id: (parent: { date: unknown }, _args: unknown, context: GraphQLContext) => datedNodeId(context, parent),
+  },
   SleepDebtSummary: {
     daily: (parent: { __daily: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
       parent.__daily.filter((day) => withinDateRange(day.date as string, args.range)).map(sleepDebtDay),
@@ -575,10 +667,18 @@ export const analyticsResolvers = {
       parent.__daily.filter((day) => withinDateRange(day.date as string, args.range)).map(recoveryDay),
   },
   MetricSeries: {
-    daily: (parent: { __daily: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
-      parent.__daily.filter((day) => withinDateRange(day.date as string, args.range)),
-    rolling7Day: (parent: { __rolling: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
-      parent.__rolling.filter((day) => withinDateRange(day.date as string, args.range)),
+    daily: (
+      parent: { __daily: Record<string, unknown>[]; __metricKey: string },
+      args: { range?: TimeRangeInput },
+    ) => parent.__daily
+      .filter((day) => withinDateRange(day.date as string, args.range))
+      .map((day) => ({ ...day, __metricKey: parent.__metricKey })),
+    rolling7Day: (
+      parent: { __rolling: Record<string, unknown>[]; __metricKey: string },
+      args: { range?: TimeRangeInput },
+    ) => parent.__rolling
+      .filter((day) => withinDateRange(day.date as string, args.range))
+      .map((day) => ({ ...day, __metricKey: parent.__metricKey })),
   },
 };
 
@@ -628,7 +728,9 @@ function healthspanDay(raw: Record<string, unknown>) {
     healthAgeYears: raw.healthAgeYears ?? null,
     ageDeltaYears: raw.ageDeltaYears ?? null,
     paceOfAging: raw.paceOfAging ?? null,
-    factors: raw.factors ?? [],
+    factors: Array.isArray(raw.factors)
+      ? (raw.factors as Record<string, unknown>[]).map((factor) => ({ ...factor, __date: raw.date }))
+      : [],
     qualityFlags: raw.qualityFlags ?? [],
   };
 }
@@ -774,10 +876,30 @@ async function metricSeriesRoot(context: GraphQLContext, key: string) {
     string,
     unknown
   >[];
+  const overview = (metricOverview.overview as Record<string, unknown> | undefined) ?? { sampleCount: 0 };
+  const canonicalUnits: Record<string, string> = {
+    steps: "steps",
+    activeCalories: "kcal",
+    totalCalories: "kcal",
+    restingHeartRate: "bpm",
+    heartRateVariability: "ms",
+    weight: "kg",
+  };
   return {
-    unit: metricOverview.unit ?? "",
-    overview: metricOverview.overview ?? { sampleCount: 0 },
-    monthly: metricOverview.monthly ?? [],
+    // A completed run normally always has metricOverviews, including empty
+    // series. Retain the resolver's existing tolerance for a missing summary
+    // without inventing a measured value: the unit is structural metadata
+    // fixed by the selected metric field itself.
+    unit: metricOverview.unit ?? canonicalUnits[key],
+    overview: {
+      ...overview,
+      latest: withMetricKey(overview.latest, key),
+      previous: withMetricKey(overview.previous, key),
+    },
+    monthly: Array.isArray(metricOverview.monthly)
+      ? (metricOverview.monthly as Record<string, unknown>[]).map((month) => ({ ...month, __metricKey: key }))
+      : [],
+    __metricKey: key,
     __daily: dailyRows,
     __rolling: metricOverview.rolling7Day ?? [],
   };

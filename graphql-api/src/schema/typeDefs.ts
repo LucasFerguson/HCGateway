@@ -243,6 +243,7 @@ export const typeDefs = /* GraphQL */ `
   # ---------------------------------------------------------------------
 
   type Analytics {
+    id: ID!
     runId: ID!
     algorithmVersion: String!
     timeZone: String!
@@ -279,6 +280,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type Day {
+    id: ID!
     contractVersion: String!
     date: Date!
     timeZone: String!
@@ -517,6 +519,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type SleepDebtDay {
+    id: ID!
     date: Date!
     sleepMinutes: Float!
     targetMinutes: Int!
@@ -555,12 +558,13 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type SleepConsistencyDay {
+    id: ID!
     date: Date!
-    source: String
-    bedtimeAt: DateTime
-    wakeAt: DateTime
-    bedtimeMinutesLocal: Float
-    wakeMinutesLocal: Float
+    source: String!
+    bedtimeAt: DateTime!
+    wakeAt: DateTime!
+    bedtimeMinutesLocal: Float!
+    wakeMinutesLocal: Float!
     baselineBedtimeMinutesLocal: Float
     baselineWakeMinutesLocal: Float
     bedtimeDeviationMinutes: Float
@@ -581,7 +585,7 @@ export const typeDefs = /* GraphQL */ `
 
   type HealthspanSummary {
     modelVersion: String!
-    status: String!
+    status: HealthspanStatus!
     birthDateConfigured: Boolean!
     methodology: String!
     calibrationReasons: [String!]!
@@ -591,7 +595,14 @@ export const typeDefs = /* GraphQL */ `
     paceWindowDays: Int
   }
 
+  enum HealthspanStatus {
+    CALIBRATING
+    PARTIAL
+    READY
+  }
+
   type HealthspanDay {
+    id: ID!
     date: Date!
     chronologicalAgeYears: Float
     healthAgeYears: Float
@@ -602,13 +613,28 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type HealthspanFactor {
-    key: String!
+    id: ID!
+    key: HealthspanFactorKey!
     label: String!
     value: Float!
-    unit: String!
-    referenceValue: Float
-    ageImpactYears: Float
-    coverageDays: Int
+    unit: HealthspanFactorUnit!
+    referenceValue: Float!
+    ageImpactYears: Float!
+    coverageDays: Int!
+  }
+
+  enum HealthspanFactorKey {
+    SLEEP_DURATION
+    SLEEP_CONSISTENCY
+    STEPS
+    RESTING_HEART_RATE
+  }
+
+  enum HealthspanFactorUnit {
+    MINUTES
+    PERCENT
+    STEPS
+    BPM
   }
 
   type DeviceSleepComparison {
@@ -624,17 +650,26 @@ export const typeDefs = /* GraphQL */ `
   # ---------------------------------------------------------------------
 
   type MetricSeries {
-    unit: String!
+    unit: MetricUnit!
     daily(range: TimeRange): [MetricDay!]!
     overview: MetricOverview!
     rolling7Day(range: TimeRange): [RollingPoint!]!
     monthly: [MonthlyPoint!]!
   }
 
+  enum MetricUnit {
+    STEPS
+    KCAL
+    BPM
+    KG
+    MS
+  }
+
   type MetricDay {
+    id: ID!
     date: Date!
     value: Float!
-    source: String
+    source: String!
     bySource: [SourceContribution!]!
     qualityFlags: [String!]!
   }
@@ -656,12 +691,14 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type RollingPoint {
+    id: ID!
     date: Date!
-    value: Float
+    value: Float!
     sampleCount: Int!
   }
 
   type MonthlyPoint {
+    id: ID!
     month: String!
     value: Float!
     sampleCount: Int!
@@ -698,6 +735,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type StrainDay {
+    id: ID!
     date: Date!
     score: Float
     loadMinutes: Float!
@@ -760,6 +798,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   type RecoveryDay {
+    id: ID!
     date: Date!
     score: Int
     band: RecoveryBand
