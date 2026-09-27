@@ -35,7 +35,9 @@ let userCounter = 0;
 
 export async function createTestHarness(configOverrides: Partial<AppConfig> = {}): Promise<TestHarness> {
   const mongod = await MongoMemoryServer.create();
-  const client = new MongoClient(mongod.getUri());
+  // Command monitoring lets integration tests verify that resolver ranges and
+  // projections reach MongoDB instead of being applied after full reads.
+  const client = new MongoClient(mongod.getUri(), { monitorCommands: true });
   await client.connect();
 
   const config: AppConfig = {

@@ -1,13 +1,19 @@
 import { GraphQLContext } from "../context.js";
 import { findUserById } from "../db/mongo.js";
 import {
+  DailyDateRange,
   DailyDocument,
-  readCurrentMetadata,
+  DailySeriesField,
+  CurrentRunDoc,
+  SummaryKind,
   readCurrentRun,
-  readDaily,
-  readDailyOne,
+  readDailySeries,
+  readDayViewOne,
+  readDayViews,
   readDeviceComparisons,
+  readLatestDailyField,
   readSleepEvents,
+  readStrainWorkoutDays,
   readSummary,
 } from "../db/analytics.js";
 import { toMetricStatus } from "./status.js";
@@ -18,14 +24,36 @@ interface TimeRangeInput {
 }
 
 /**
- * Every dated array below (daily/trend/workouts/sleepEvents) is read in full
- * from an _analytics_* collection already scoped to one pinned runId, then
- * filtered in-process by local calendar `date` (a string) or an ISO instant
- * field against the optional TimeRange. This mirrors the design doc's
- * "every bucketed/derived field stays cheap ... because it reads
- * pre-aggregated _analytics_* documents" - no raw collection scan happens
- * for any Analytics.* field.
+ * Prepared daily rows are keyed by a local calendar date, while TimeRange is
+ * instant-based. The existing GraphQL contract treats a dated row as UTC
+ * midnight for range membership. Ceiling both boundaries to date strings so
+ * Mongo's half-open date query exactly preserves that behavior even when a
+ * caller supplies a non-midnight instant.
  */
+function utcCeilingDate(value: Date): string {
+  const midnight = Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+  const date = new Date(value.getTime() === midnight ? midnight : midnight + 86_400_000);
+  return date.toISOString().slice(0, 10);
+}
+
+function dailyDateRange(range?: TimeRangeInput): DailyDateRange {
+  if (!range) return {};
+  return {
+    startDate: utcCeilingDate(range.start),
+    endDateExclusive: utcCeilingDate(range.endExclusive),
+  };
+}
+
+function shiftDate(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function rangeCacheKey(runId: string, range: DailyDateRange): string {
+  return `${runId}\u0000${range.startDate ?? ""}\u0000${range.endDateExclusive ?? ""}`;
+}
+
 function withinDateRange(dateStr: string, range?: TimeRangeInput): boolean {
   if (!range) return true;
   // Dates are local calendar dates (YYYY-MM-DD); compare as UTC midnight
@@ -41,12 +69,76 @@ function withinInstantRange(value: string | Date | null | undefined, range?: Tim
   return instant >= range.start.getTime() && instant < range.endExclusive.getTime();
 }
 
-/** Resolve the pinned run (context.analyticsRunId, set once by Viewer). */
+function cachedSummary(
+  context: GraphQLContext,
+  runId: string,
+  kind: SummaryKind,
+  fieldName: string,
+): Promise<Record<string, unknown> | null> {
+  const key = `${runId}\u0000${kind}`;
+  let pending = context.analyticsReadCache.summaries.get(key);
+  if (!pending) {
+    pending = readSummary(context.userDb, runId, kind);
+    context.analyticsReadCache.summaries.set(key, pending);
+  }
+  return context.withTimeout(pending, fieldName);
+}
+
+function cachedDailySeries(
+  context: GraphQLContext,
+  runId: string,
+  range: DailyDateRange,
+  fieldName: string,
+): Promise<DailyDocument[]> {
+  const key = rangeCacheKey(runId, range);
+  let pending = context.analyticsReadCache.dailySeries.get(key);
+  if (!pending) {
+    pending = readDailySeries(context.userDb, runId, range);
+    context.analyticsReadCache.dailySeries.set(key, pending);
+  }
+  return context.withTimeout(pending, fieldName);
+}
+
+function workoutDateEnvelope(range?: TimeRangeInput): DailyDateRange {
+  const normalized = dailyDateRange(range);
+  return {
+    startDate: normalized.startDate ? shiftDate(normalized.startDate, -1) : undefined,
+    endDateExclusive: normalized.endDateExclusive ? shiftDate(normalized.endDateExclusive, 1) : undefined,
+  };
+}
+
+function cachedStrainWorkoutDays(
+  context: GraphQLContext,
+  runId: string,
+  range: DailyDateRange,
+): Promise<DailyDocument[]> {
+  const key = rangeCacheKey(runId, range);
+  let pending = context.analyticsReadCache.strainWorkoutDays.get(key);
+  if (!pending) {
+    pending = readStrainWorkoutDays(context.userDb, runId, range);
+    context.analyticsReadCache.strainWorkoutDays.set(key, pending);
+  }
+  return context.withTimeout(pending, "analytics.strain.workouts");
+}
+
+/** Resolve the pinned run ID after Viewer has pinned the complete current-run document. */
 function requireRunId(context: GraphQLContext): string {
   if (!context.analyticsRunId) {
     throw new Error("analytics run was not pinned - Viewer resolver must run before Analytics fields");
   }
   return context.analyticsRunId;
+}
+
+async function pinCurrentRun(context: GraphQLContext): Promise<CurrentRunDoc> {
+  if (!context.analyticsCurrentRun) {
+    context.analyticsCurrentRun = context.withTimeout(readCurrentRun(context.userDb), "viewer.analytics");
+  }
+  const current = await context.analyticsCurrentRun;
+  if (!current) {
+    throw new Error("Analytics are not ready for this account yet (no completed run found).");
+  }
+  context.analyticsRunId = current.runId;
+  return current;
 }
 
 /**
@@ -77,6 +169,14 @@ function metricValue(raw: Record<string, unknown> | null | undefined) {
 }
 
 const STAGE_NAMES = ["deep", "light", "rem", "asleep", "awake", "unknown"] as const;
+
+function sleepStage(raw: Record<string, unknown>) {
+  return {
+    startAt: raw.startAt,
+    endAt: raw.endAt,
+    kind: String(raw.kind ?? "unknown").toUpperCase(),
+  };
+}
 
 function stageMinutes(raw: Record<string, unknown> | null | undefined) {
   if (!raw) return null;
@@ -212,7 +312,9 @@ function dayFromView(dateArg: string, dayView: Record<string, unknown> | null | 
         note: heartRateTimeline.note ?? null,
       },
       strain: timeline.strain ?? [],
-      sleepStages: timeline.sleepStages ?? [],
+      sleepStages: Array.isArray(timeline.sleepStages)
+        ? (timeline.sleepStages as Array<Record<string, unknown>>).map(sleepStage)
+        : [],
       steps: Array.isArray(timeline.steps)
         ? (timeline.steps as Array<Record<string, unknown>>).map((bucket) => ({
             hour: bucket.hour,
@@ -396,11 +498,7 @@ function sleepEventType(raw: Record<string, unknown>) {
 function sleepSessionFromEmbedded(raw: Record<string, unknown> | undefined) {
   if (!raw) return null;
   const stages = Array.isArray(raw.stages)
-    ? (raw.stages as Array<Record<string, unknown>>).map((stage) => ({
-        startAt: stage.startAt,
-        endAt: stage.endAt,
-        kind: String(stage.kind ?? "unknown").toUpperCase(),
-      }))
+    ? (raw.stages as Array<Record<string, unknown>>).map(sleepStage)
     : [];
   return {
     id: raw.id,
@@ -470,32 +568,19 @@ export const analyticsResolvers = {
   },
   Viewer: {
     analytics: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
-      // Pin runId once per request here, per the design doc's Viewer
-      // contract, so every Analytics.* field below reads the same run.
-      if (!context.analyticsRunId) {
-        const current = await context.withTimeout(readCurrentRun(context.userDb), "viewer.analytics");
-        if (!current) {
-          throw new Error("Analytics are not ready for this account yet (no completed run found).");
-        }
-        context.analyticsRunId = current.runId;
-      }
-      return {};
+      // Store the Promise before awaiting: aliases share one read and one
+      // complete metadata object, not merely the same eventual runId.
+      return pinCurrentRun(context);
     },
   },
   Analytics: {
     id: (_parent: unknown, _args: unknown, context: GraphQLContext) => analyticsNodePrefix(context),
-    runId: (_parent: unknown, _args: unknown, context: GraphQLContext) => requireRunId(context),
-    algorithmVersion: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
-      const meta = await context.withTimeout(readCurrentMetadata(context.userDb), "analytics.algorithmVersion");
-      return meta?.algorithmVersion ?? "";
-    },
+    runId: (parent: CurrentRunDoc) => parent.runId,
+    algorithmVersion: (parent: CurrentRunDoc) => parent.algorithmVersion,
     timeZone: async (_parent: unknown, _args: unknown, context: GraphQLContext) => resolveHomeTimeZone(context),
-    processedAt: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
-      const meta = await context.withTimeout(readCurrentMetadata(context.userDb), "analytics.processedAt");
-      return meta?.completedAt ?? null;
-    },
+    processedAt: (parent: CurrentRunDoc) => parent.completedAt,
     day: async (
-      _parent: unknown,
+      parent: CurrentRunDoc,
       args: { date: string; radius?: number },
       context: GraphQLContext,
     ) => {
@@ -511,15 +596,17 @@ export const analyticsResolvers = {
       end.setUTCDate(end.getUTCDate() + radius);
       const startDate = start.toISOString().slice(0, 10);
       const endDate = end.toISOString().slice(0, 10);
-      const meta = await context.withTimeout(readCurrentMetadata(context.userDb), "analytics.day");
       const homeTimeZone = await resolveHomeTimeZone(context);
-      const processedAt = meta?.completedAt ?? null;
+      const processedAt = parent.completedAt;
       let dayView: Record<string, unknown> | null | undefined;
       if (radius === 0) {
-        const doc = await context.withTimeout(readDailyOne(context.userDb, runId, args.date), "analytics.day");
+        const doc = await context.withTimeout(readDayViewOne(context.userDb, runId, args.date), "analytics.day");
         dayView = doc?.dayView;
       } else {
-        const docs = await context.withTimeout(readDaily(context.userDb, runId, startDate, endDate), "analytics.day");
+        const docs = await context.withTimeout(
+          readDayViews(context.userDb, runId, { startDate, endDateExclusive: shiftDate(endDate, 1) }),
+          "analytics.day",
+        );
         const byDate = new Map(docs.map((doc) => [doc.date, doc.dayView]));
         dayView = byDate.get(args.date);
       }
@@ -530,38 +617,36 @@ export const analyticsResolvers = {
     },
     days: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) => {
       const runId = requireRunId(context);
-      const range = args.range;
-      const startDate = range ? isoDate(range.start) : undefined;
-      // endExclusive is exclusive; _analytics_daily's date filter is
-      // inclusive ($lte), so subtract a day when translating.
-      const endDate = range ? isoDate(new Date(range.endExclusive.getTime() - 86_400_000)) : undefined;
-      const docs = await context.withTimeout(readDaily(context.userDb, runId, startDate, endDate), "analytics.days");
+      const docs = await context.withTimeout(
+        readDayViews(context.userDb, runId, dailyDateRange(args.range)),
+        "analytics.days",
+      );
       return docs.map((doc) => dayFromView(doc.date, doc.dayView)).filter((day) => day !== null);
     },
     sleepEvents: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) => {
       const runId = requireRunId(context);
-      const events = await context.withTimeout(readSleepEvents(context.userDb, runId), "analytics.sleepEvents");
+      const events = await context.withTimeout(
+        readSleepEvents(context.userDb, runId, dailyDateRange(args.range)),
+        "analytics.sleepEvents",
+      );
       return events
         .filter((event) => withinDateRange(event.date as string, args.range))
         .map(sleepEventType);
     },
     sleepDebt: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       const runId = requireRunId(context);
-      const summary = await context.withTimeout(readSummary(context.userDb, runId, "sleepDebt"), "analytics.sleepDebt");
-      return sleepDebtSummary(summary, runId, context);
+      const summary = await cachedSummary(context, runId, "sleepDebt", "analytics.sleepDebt");
+      return sleepDebtSummary(summary);
     },
     sleepConsistency: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       const runId = requireRunId(context);
-      const summary = await context.withTimeout(
-        readSummary(context.userDb, runId, "sleepConsistency"),
-        "analytics.sleepConsistency",
-      );
-      return sleepConsistencySummary(summary, runId, context);
+      const summary = await cachedSummary(context, runId, "sleepConsistency", "analytics.sleepConsistency");
+      return sleepConsistencySummary(summary);
     },
     healthspan: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       const runId = requireRunId(context);
-      const summary = await context.withTimeout(readSummary(context.userDb, runId, "healthspan"), "analytics.healthspan");
-      return healthspanSummary(summary, runId, context);
+      const summary = await cachedSummary(context, runId, "healthspan", "analytics.healthspan");
+      return healthspanSummary(summary);
     },
     deviceSleepComparisons: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       const runId = requireRunId(context);
@@ -579,13 +664,13 @@ export const analyticsResolvers = {
     weight: async (_parent: unknown, _args: unknown, context: GraphQLContext) => metricSeriesRoot(context, "weight"),
     strain: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       const runId = requireRunId(context);
-      const summary = await context.withTimeout(readSummary(context.userDb, runId, "strain"), "analytics.strain");
-      return strainSummary(summary, runId, context);
+      const summary = await cachedSummary(context, runId, "strain", "analytics.strain");
+      return strainSummary(summary);
     },
     recovery: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       const runId = requireRunId(context);
-      const summary = await context.withTimeout(readSummary(context.userDb, runId, "recovery"), "analytics.recovery");
-      return recoverySummary(summary, runId, context);
+      const summary = await cachedSummary(context, runId, "recovery", "analytics.recovery");
+      return recoverySummary(summary);
     },
   },
   Day: {
@@ -635,44 +720,105 @@ export const analyticsResolvers = {
     id: (parent: { date: unknown }, _args: unknown, context: GraphQLContext) => datedNodeId(context, parent),
   },
   SleepDebtSummary: {
-    daily: (parent: { __daily: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
-      parent.__daily.filter((day) => withinDateRange(day.date as string, args.range)).map(sleepDebtDay),
-    latest: (parent: { __daily: Record<string, unknown>[] }) => {
-      const latest = parent.__daily[parent.__daily.length - 1];
+    daily: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) => {
+      const runId = requireRunId(context);
+      const daily = await cachedDailySeries(context, runId, dailyDateRange(args.range), "analytics.sleepDebt.daily");
+      return daily.map((doc) => doc.sleepDebt).filter(Boolean).map((day) => sleepDebtDay(day as Record<string, unknown>));
+    },
+    latest: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+      const latest = await context.withTimeout(
+        readLatestDailyField(context.userDb, requireRunId(context), "sleepDebt"),
+        "analytics.sleepDebt.latest",
+      );
       return latest ? sleepDebtDay(latest) : null;
     },
   },
   SleepConsistencySummary: {
-    daily: (parent: { __daily: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
-      parent.__daily.filter((day) => withinDateRange(day.date as string, args.range)).map(sleepConsistencyDay),
-    latest: (parent: { __daily: Record<string, unknown>[] }) => {
-      const latest = [...parent.__daily].reverse().find((day) => day.score != null);
+    daily: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) => {
+      const runId = requireRunId(context);
+      const daily = await cachedDailySeries(
+        context,
+        runId,
+        dailyDateRange(args.range),
+        "analytics.sleepConsistency.daily",
+      );
+      return daily
+        .map((doc) => doc.sleepConsistency)
+        .filter(Boolean)
+        .map((day) => sleepConsistencyDay(day as Record<string, unknown>));
+    },
+    latest: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+      const latest = await context.withTimeout(
+        readLatestDailyField(context.userDb, requireRunId(context), "sleepConsistency", "score"),
+        "analytics.sleepConsistency.latest",
+      );
       return latest ? sleepConsistencyDay(latest) : null;
     },
   },
   HealthspanSummary: {
-    trend: (parent: { __trend: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
-      parent.__trend.filter((day) => withinDateRange(day.date as string, args.range)).map(healthspanDay),
+    trend: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) => {
+      const runId = requireRunId(context);
+      const daily = await cachedDailySeries(context, runId, dailyDateRange(args.range), "analytics.healthspan.trend");
+      return daily.map((doc) => doc.healthspan).filter(Boolean).map((day) => healthspanDay(day as Record<string, unknown>));
+    },
+    latest: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
+      const latest = await context.withTimeout(
+        readLatestDailyField(context.userDb, requireRunId(context), "healthspan"),
+        "analytics.healthspan.latest",
+      );
+      return latest ? healthspanDay(latest) : null;
+    },
   },
   StrainSummary: {
-    daily: (parent: { __daily: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
-      parent.__daily.filter((day) => withinDateRange(day.date as string, args.range)).map(strainDay),
-    workouts: (parent: { __workouts: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
-      parent.__workouts
-        .filter((workout) => withinInstantRange(workout.startAt as string, args.range))
-        .map(strainWorkout),
+    daily: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) => {
+      const runId = requireRunId(context);
+      const daily = await cachedDailySeries(context, runId, dailyDateRange(args.range), "analytics.strain.daily");
+      return daily.map((doc) => doc.strain).filter(Boolean).map((day) => strainDay(day as Record<string, unknown>));
+    },
+    workouts: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) => {
+      const days = await cachedStrainWorkoutDays(
+        context,
+        requireRunId(context),
+        workoutDateEnvelope(args.range),
+      );
+      const seen = new Set<string>();
+      const workouts: Record<string, unknown>[] = [];
+      for (const doc of days) {
+        for (const workout of (doc.strainWorkouts as Record<string, unknown>[] | undefined) ?? []) {
+          if (!withinInstantRange(workout.startAt as string, args.range)) continue;
+          const key = strainWorkoutIdentity(workout);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          workouts.push(workout);
+        }
+      }
+      return workouts.map(strainWorkout);
+    },
   },
   RecoverySummary: {
-    daily: (parent: { __daily: Record<string, unknown>[] }, args: { range?: TimeRangeInput }) =>
-      parent.__daily.filter((day) => withinDateRange(day.date as string, args.range)).map(recoveryDay),
+    daily: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) => {
+      const runId = requireRunId(context);
+      const daily = await cachedDailySeries(context, runId, dailyDateRange(args.range), "analytics.recovery.daily");
+      return daily.map((doc) => doc.recovery).filter(Boolean).map((day) => recoveryDay(day as Record<string, unknown>));
+    },
   },
   MetricSeries: {
-    daily: (
-      parent: { __daily: Record<string, unknown>[]; __metricKey: string },
+    daily: async (
+      parent: { __metricKey: DailySeriesField },
       args: { range?: TimeRangeInput },
-    ) => parent.__daily
-      .filter((day) => withinDateRange(day.date as string, args.range))
-      .map((day) => ({ ...day, __metricKey: parent.__metricKey })),
+      context: GraphQLContext,
+    ) => {
+      const daily = await cachedDailySeries(
+        context,
+        requireRunId(context),
+        dailyDateRange(args.range),
+        `analytics.${parent.__metricKey}.daily`,
+      );
+      return daily
+        .map((doc) => (doc as unknown as Record<string, unknown>)[parent.__metricKey])
+        .filter(Boolean)
+        .map((day) => ({ ...(day as Record<string, unknown>), __metricKey: parent.__metricKey }));
+    },
     rolling7Day: (
       parent: { __rolling: Record<string, unknown>[]; __metricKey: string },
       args: { range?: TimeRangeInput },
@@ -681,10 +827,6 @@ export const analyticsResolvers = {
       .map((day) => ({ ...day, __metricKey: parent.__metricKey })),
   },
 };
-
-function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
 
 function sleepDebtDay(raw: Record<string, unknown>) {
   return {
@@ -759,6 +901,10 @@ function strainWorkout(raw: Record<string, unknown>) {
   };
 }
 
+function strainWorkoutIdentity(workout: Record<string, unknown>): string {
+  return workout.id == null ? `content:${JSON.stringify(workout)}` : `id:${String(workout.id)}`;
+}
+
 function recoveryDay(raw: Record<string, unknown>) {
   return {
     date: raw.date,
@@ -771,9 +917,7 @@ function recoveryDay(raw: Record<string, unknown>) {
   };
 }
 
-async function sleepDebtSummary(summary: Record<string, unknown> | null, runId: string, context: GraphQLContext) {
-  const daily = await context.withTimeout(readDaily(context.userDb, runId), "analytics.sleepDebt.daily");
-  const dailyRows = daily.map((doc) => doc.sleepDebt).filter(Boolean) as Record<string, unknown>[];
+function sleepDebtSummary(summary: Record<string, unknown> | null) {
   return {
     targetMinutes: summary?.targetMinutes ?? 0,
     methodology: summary?.methodology ?? "",
@@ -781,13 +925,10 @@ async function sleepDebtSummary(summary: Record<string, unknown> | null, runId: 
     average30DayMinutes: summary?.average30DayMinutes ?? null,
     previous30DayAverageMinutes: summary?.previous30DayAverageMinutes ?? null,
     breakdown30Day: summary?.breakdown30Day ?? null,
-    __daily: dailyRows,
   };
 }
 
-async function sleepConsistencySummary(summary: Record<string, unknown> | null, runId: string, context: GraphQLContext) {
-  const daily = await context.withTimeout(readDaily(context.userDb, runId), "analytics.sleepConsistency.daily");
-  const dailyRows = daily.map((doc) => doc.sleepConsistency).filter(Boolean) as Record<string, unknown>[];
+function sleepConsistencySummary(summary: Record<string, unknown> | null) {
   return {
     baselineWindowDays: summary?.baselineWindowDays ?? 0,
     minimumBaselineNights: summary?.minimumBaselineNights ?? 0,
@@ -796,47 +937,22 @@ async function sleepConsistencySummary(summary: Record<string, unknown> | null, 
     average30DayScore: summary?.average30DayScore ?? null,
     previous30DayAverageScore: summary?.previous30DayAverageScore ?? null,
     breakdown30Day: summary?.breakdown30Day ?? null,
-    __daily: dailyRows,
   };
 }
 
-async function healthspanSummary(summary: Record<string, unknown> | null, runId: string, context: GraphQLContext) {
-  const daily = await context.withTimeout(readDaily(context.userDb, runId), "analytics.healthspan.trend");
-  const trendRows = daily.map((doc) => doc.healthspan).filter(Boolean) as Record<string, unknown>[];
+function healthspanSummary(summary: Record<string, unknown> | null) {
   return {
     modelVersion: summary?.modelVersion ?? "",
     status: summary?.status ?? "calibrating",
     birthDateConfigured: summary?.birthDateConfigured ?? false,
     methodology: summary?.methodology ?? "",
     calibrationReasons: summary?.calibrationReasons ?? [],
-    latest: trendRows.length ? healthspanDay(trendRows[trendRows.length - 1]) : null,
     paceOfAging: summary?.paceOfAging ?? null,
     paceWindowDays: summary?.paceWindowDays ?? null,
-    __trend: trendRows,
   };
 }
 
-async function strainSummary(summary: Record<string, unknown> | null, runId: string, context: GraphQLContext) {
-  const daily = await context.withTimeout(readDaily(context.userDb, runId), "analytics.strain.daily");
-  const dailyRows = daily.map((doc) => doc.strain).filter(Boolean) as Record<string, unknown>[];
-  // Each _analytics_daily document now carries a `strainWorkouts` list
-  // (store.py's _strain_workouts_by_date) - full per-workout strain detail
-  // grouped onto every local date the workout's start or end touches, the
-  // same membership rule day_dashboard.py's Day.timeline.workouts already
-  // uses. A workout spanning local midnight therefore appears on two
-  // documents; dedupe by id (falling back to identity) so this whole-history
-  // field returns each workout exactly once regardless of date span.
-  const seen = new Set<unknown>();
-  const workoutRows: Record<string, unknown>[] = [];
-  for (const doc of daily) {
-    const workouts = (doc.strainWorkouts as Record<string, unknown>[] | undefined) ?? [];
-    for (const workout of workouts) {
-      const key = workout.id ?? workout;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      workoutRows.push(workout);
-    }
-  }
+function strainSummary(summary: Record<string, unknown> | null) {
   return {
     algorithmVersion: summary?.algorithmVersion ?? "",
     status: summary?.status ?? "unavailable",
@@ -847,14 +963,10 @@ async function strainSummary(summary: Record<string, unknown> | null, runId: str
     calibration: summary?.calibration ?? { available: false, reasons: [] },
     availability: summary?.availability ?? { available: false, reasons: [] },
     source: summary?.source ?? null,
-    __daily: dailyRows,
-    __workouts: workoutRows,
   };
 }
 
-async function recoverySummary(summary: Record<string, unknown> | null, runId: string, context: GraphQLContext) {
-  const daily = await context.withTimeout(readDaily(context.userDb, runId), "analytics.recovery.daily");
-  const dailyRows = daily.map((doc) => doc.recovery).filter(Boolean) as Record<string, unknown>[];
+function recoverySummary(summary: Record<string, unknown> | null) {
   return {
     algorithmVersion: summary?.algorithmVersion ?? "",
     status: summary?.status ?? "insufficient_data",
@@ -863,19 +975,13 @@ async function recoverySummary(summary: Record<string, unknown> | null, runId: s
     limitations: summary?.limitations ?? [],
     weights: summary?.weights ?? { sleep: 0, hrv: 0, restingHeartRate: 0, sleepConsistency: 0 },
     availability: summary?.availability ?? { available: false, publishableDayCount: 0, completeDayCount: 0, reasons: [] },
-    __daily: dailyRows,
   };
 }
 
-async function metricSeriesRoot(context: GraphQLContext, key: string) {
+async function metricSeriesRoot(context: GraphQLContext, key: DailySeriesField) {
   const runId = requireRunId(context);
-  const overviews = await context.withTimeout(readSummary(context.userDb, runId, "metricOverviews"), `analytics.${key}`);
+  const overviews = await cachedSummary(context, runId, "metricOverviews", `analytics.${key}`);
   const metricOverview = (overviews?.[key] as Record<string, unknown>) ?? {};
-  const daily = await context.withTimeout(readDaily(context.userDb, runId), `analytics.${key}.daily`);
-  const dailyRows = daily.map((doc) => (doc as unknown as Record<string, unknown>)[key]).filter(Boolean) as Record<
-    string,
-    unknown
-  >[];
   const overview = (metricOverview.overview as Record<string, unknown> | undefined) ?? { sampleCount: 0 };
   const canonicalUnits: Record<string, string> = {
     steps: "steps",
@@ -900,7 +1006,6 @@ async function metricSeriesRoot(context: GraphQLContext, key: string) {
       ? (metricOverview.monthly as Record<string, unknown>[]).map((month) => ({ ...month, __metricKey: key }))
       : [],
     __metricKey: key,
-    __daily: dailyRows,
     __rolling: metricOverview.rolling7Day ?? [],
   };
 }

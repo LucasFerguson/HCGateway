@@ -1,3 +1,4 @@
+import { CommandStartedEvent } from "mongodb";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { userDatabaseName } from "../db/mongo.js";
 import { createTestHarness, TestHarness } from "./testServer.js";
@@ -47,6 +48,19 @@ describe("prepared analytics GraphQL contract", () => {
         reasons: [],
       },
     };
+    const nextDayWorkout = {
+      ...workout,
+      id: "workout-2",
+      startAt: "2026-01-06T00:15:00Z",
+      endAt: "2026-01-06T00:45:00Z",
+    };
+    const idlessWorkout = {
+      ...workout,
+      id: undefined,
+      startAt: "2026-01-05T20:00:00Z",
+      endAt: "2026-01-05T20:30:00Z",
+      score: 2.1,
+    };
 
     await db.collection("_analytics_daily").insertMany([
       {
@@ -55,7 +69,26 @@ describe("prepared analytics GraphQL contract", () => {
         storageFormat: "plain-bson-v1",
         data: {
           date,
-          dayView: { date, contractVersion: "health-day-v1", dayState: "recorded", timeZone: "UTC" },
+          dayView: {
+            date,
+            contractVersion: "health-day-v1",
+            dayState: "recorded",
+            timeZone: "UTC",
+            timeline: {
+              sleepStages: [
+                {
+                  startAt: "2026-01-04T22:00:00Z",
+                  endAt: "2026-01-04T22:15:00Z",
+                  kind: "awake",
+                },
+                {
+                  startAt: "2026-01-04T22:15:00Z",
+                  endAt: "2026-01-04T23:00:00Z",
+                  kind: "light",
+                },
+              ],
+            },
+          },
           sleepDebt: {
             date,
             sleepMinutes: 450,
@@ -99,7 +132,7 @@ describe("prepared analytics GraphQL contract", () => {
             timeline: [],
             quality: workout.quality,
           },
-          strainWorkouts: [workout],
+          strainWorkouts: [workout, idlessWorkout],
           recovery: {
             date,
             score: 80,
@@ -123,7 +156,11 @@ describe("prepared analytics GraphQL contract", () => {
         runId,
         date: "2026-01-06",
         storageFormat: "plain-bson-v1",
-        data: { date: "2026-01-06", strainWorkouts: [workout] },
+        data: {
+          date: "2026-01-06",
+          steps: { date: "2026-01-06", value: 2000, source: "test.source", bySource: [], qualityFlags: [] },
+          strainWorkouts: [workout, idlessWorkout, nextDayWorkout],
+        },
       },
     ] as never);
 
@@ -254,6 +291,30 @@ describe("prepared analytics GraphQL contract", () => {
     expect(analytics.recovery.daily[0].id).toBe(`${identityPrefix}:${date}`);
   });
 
+  it("serializes prepared day sleep-stage kinds as GraphQL enums", async () => {
+    const result = await harness.executeAsUser(user.token, `query {
+      viewer { analytics {
+        days(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) {
+          timeline { sleepStages { startAt endAt kind } }
+        }
+      } }
+    }`);
+
+    expect(result.errors).toBeUndefined();
+    expect((result.body as any).viewer.analytics.days[0].timeline.sleepStages).toEqual([
+      {
+        startAt: "2026-01-04T22:00:00.000Z",
+        endAt: "2026-01-04T22:15:00.000Z",
+        kind: "AWAKE",
+      },
+      {
+        startAt: "2026-01-04T22:15:00.000Z",
+        endAt: "2026-01-04T23:00:00.000Z",
+        kind: "LIGHT",
+      },
+    ]);
+  });
+
   it("namespaces identities by account and preserves canonical units when summaries are absent", async () => {
     const other = await harness.createUser();
     const db = harness.client.db(userDatabaseName(other.userId));
@@ -317,18 +378,193 @@ describe("prepared analytics GraphQL contract", () => {
     });
   });
 
-  it("deduplicates a persisted workout spanning two daily documents", async () => {
+  it("deduplicates identified and id-less workouts spanning daily documents", async () => {
+    const commands: CommandStartedEvent[] = [];
+    const listener = (event: CommandStartedEvent) => commands.push(event);
+    harness.client.on("commandStarted", listener);
+    try {
+      const result = await harness.executeAsUser(user.token, `query {
+        viewer { analytics { strain {
+          workouts(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) {
+            id startAt endAt score
+          }
+        } } }
+      }`);
+      expect(result.errors).toBeUndefined();
+      expect((result.body as any).viewer.analytics.strain.workouts).toEqual([
+        {
+          id: "workout-1",
+          startAt: "2026-01-05T23:30:00.000Z",
+          endAt: "2026-01-06T00:30:00.000Z",
+          score: 4.2,
+        },
+        {
+          id: null,
+          startAt: "2026-01-05T20:00:00.000Z",
+          endAt: "2026-01-05T20:30:00.000Z",
+          score: 2.1,
+        },
+      ]);
+
+      const workoutFinds = commands.filter(
+        (event) =>
+          event.command.find === "_analytics_daily" && event.command.projection?.["data.strainWorkouts"] === 1,
+      );
+      expect(workoutFinds).toHaveLength(1);
+      expect(workoutFinds[0].command.filter.date).toEqual({ $gte: "2026-01-04", $lt: "2026-01-07" });
+      expect(workoutFinds[0].command.projection?.["data.dayView"]).toBeUndefined();
+    } finally {
+      harness.client.off("commandStarted", listener);
+    }
+  });
+
+  it("finds global latest rows without treating missing projected fields as values", async () => {
     const result = await harness.executeAsUser(user.token, `query {
-      viewer { analytics { strain { workouts { id startAt endAt score } } } }
+      viewer { analytics {
+        sleepDebt { latest { date } }
+        sleepConsistency { latest { date } }
+        healthspan { latest { date } }
+      } }
     }`);
+
     expect(result.errors).toBeUndefined();
-    expect((result.body as any).viewer.analytics.strain.workouts).toEqual([
-      {
-        id: "workout-1",
-        startAt: "2026-01-05T23:30:00.000Z",
-        endAt: "2026-01-06T00:30:00.000Z",
-        score: 4.2,
-      },
-    ]);
+    expect((result.body as any).viewer.analytics).toMatchObject({
+      sleepDebt: { latest: { date } },
+      sleepConsistency: { latest: { date } },
+      healthspan: { latest: { date } },
+    });
+  });
+
+  it("pins one complete current run across aliased analytics roots", async () => {
+    const commands: CommandStartedEvent[] = [];
+    const listener = (event: CommandStartedEvent) => commands.push(event);
+    harness.client.on("commandStarted", listener);
+    try {
+      const result = await harness.executeAsUser(user.token, `query {
+        viewer {
+          first: analytics {
+            runId algorithmVersion processedAt
+            day(date: "2026-01-04") { generatedAt }
+          }
+          second: analytics { runId algorithmVersion processedAt }
+        }
+      }`);
+
+      expect(result.errors).toBeUndefined();
+      const expected = {
+        runId,
+        algorithmVersion: "health-analytics-v8.4",
+        processedAt: "2026-01-06T00:00:00.000Z",
+      };
+      expect((result.body as any).viewer.first).toMatchObject({
+        ...expected,
+        day: { generatedAt: expected.processedAt },
+      });
+      expect((result.body as any).viewer.second).toEqual(expected);
+
+      const currentFinds = commands.filter((event) => event.command.find === "_analytics_current");
+      expect(currentFinds).toHaveLength(1);
+    } finally {
+      harness.client.off("commandStarted", listener);
+    }
+  });
+
+  it("preserves non-midnight date membership and isolates distinct range aliases", async () => {
+    const commands: CommandStartedEvent[] = [];
+    const listener = (event: CommandStartedEvent) => commands.push(event);
+    harness.client.on("commandStarted", listener);
+    try {
+      const result = await harness.executeAsUser(user.token, `query {
+        viewer { analytics { steps {
+          first: daily(range: {
+            start: "2026-01-04T12:00:00Z"
+            endExclusive: "2026-01-05T12:00:00Z"
+          }) { date }
+          second: daily(range: {
+            start: "2026-01-05T12:00:00Z"
+            endExclusive: "2026-01-06T12:00:00Z"
+          }) { date }
+        } } }
+      }`);
+
+      expect(result.errors).toBeUndefined();
+      expect((result.body as any).viewer.analytics.steps).toEqual({
+        first: [{ date: "2026-01-05" }],
+        second: [{ date: "2026-01-06" }],
+      });
+
+      const seriesFinds = commands.filter(
+        (event) => event.command.find === "_analytics_daily" && event.command.projection?.["data.steps"] === 1,
+      );
+      expect(seriesFinds).toHaveLength(2);
+      expect(seriesFinds.map((event) => event.command.filter.date)).toEqual(expect.arrayContaining([
+        { $gte: "2026-01-05", $lt: "2026-01-06" },
+        { $gte: "2026-01-06", $lt: "2026-01-07" },
+      ]));
+      expect(seriesFinds.every((event) => event.command.filter.runId === runId)).toBe(true);
+    } finally {
+      harness.client.off("commandStarted", listener);
+    }
+  });
+
+  it("coalesces bounded series reads and keeps day views out of their Mongo projection", async () => {
+    const commands: CommandStartedEvent[] = [];
+    const listener = (event: CommandStartedEvent) => commands.push(event);
+    harness.client.on("commandStarted", listener);
+    try {
+      const result = await harness.executeAsUser(user.token, `query {
+        viewer { analytics {
+          days(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) { date }
+          sleepDebt { daily(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) { date } }
+          sleepConsistency { daily(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) { date } }
+          healthspan { trend(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) { date } }
+          steps { daily(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) { date } }
+          weight { daily(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) { date } }
+          strain { daily(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) { date } }
+          recovery { daily(range: { start: "2026-01-05T00:00:00Z", endExclusive: "2026-01-06T00:00:00Z" }) { date } }
+        } }
+      }`);
+
+      expect(result.errors).toBeUndefined();
+      const analytics = (result.body as any).viewer.analytics;
+      expect(analytics.days.map((row: any) => row.date)).toEqual([date]);
+      for (const rows of [
+        analytics.sleepDebt.daily,
+        analytics.sleepConsistency.daily,
+        analytics.healthspan.trend,
+        analytics.steps.daily,
+        analytics.weight.daily,
+        analytics.strain.daily,
+        analytics.recovery.daily,
+      ]) {
+        expect(rows.map((row: any) => row.date)).toEqual([date]);
+      }
+
+      const dailyFinds = commands.filter((event) => event.command.find === "_analytics_daily");
+      expect(dailyFinds).toHaveLength(2);
+      for (const event of dailyFinds) {
+        expect(event.command.filter.runId).toBe(runId);
+        expect(event.command.filter.date).toEqual({ $gte: date, $lt: "2026-01-06" });
+      }
+      const seriesFind = dailyFinds.find((event) => event.command.projection?.["data.steps"] === 1);
+      const dayViewFind = dailyFinds.find((event) => event.command.projection?.["data.dayView"] === 1);
+      expect(seriesFind).toBeDefined();
+      expect(seriesFind?.command.projection?.["data.dayView"]).toBeUndefined();
+      expect(dayViewFind).toBeDefined();
+      expect(dayViewFind?.command.projection?.["data.steps"]).toBeUndefined();
+
+      const metricOverviewFinds = commands.filter(
+        (event) => event.command.find === "_analytics_summaries" && event.command.filter?.kind === "metricOverviews",
+      );
+      expect(metricOverviewFinds).toHaveLength(1);
+      expect(metricOverviewFinds[0].command.filter.runId).toBe(runId);
+      expect(
+        commands
+          .filter((event) => event.command.find === "_analytics_summaries")
+          .every((event) => event.command.filter.runId === runId),
+      ).toBe(true);
+    } finally {
+      harness.client.off("commandStarted", listener);
+    }
   });
 });

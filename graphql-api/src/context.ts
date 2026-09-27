@@ -3,6 +3,7 @@ import { GraphQLError } from "graphql";
 import { AuthenticatedUser, authenticate } from "./security/auth.js";
 import { CONTROL_DB_NAME, userDb } from "./db/mongo.js";
 import { AppConfig } from "./config.js";
+import { CurrentRunDoc, DailyDocument } from "./db/analytics.js";
 
 /**
  * Per-request Apollo Server context. Built once in the `context` function
@@ -14,10 +15,9 @@ import { AppConfig } from "./config.js";
  *  - a resolver-timeout helper, applied per resolved field for the ~25s
  *    safety backstop
  *
- * runId pinning: Viewer's resolver (not this module) reads
- * _analytics_current once and stores it on `analyticsRunId` below, so every
- * Analytics.* resolver in the same operation reads the same immutable run
- * even if the worker completes a new one mid-request.
+ * Run pinning: Viewer's resolver stores the in-flight _analytics_current read
+ * as `analyticsCurrentRun`, so aliases coalesce and every Analytics field uses
+ * the same immutable run metadata even if the worker completes mid-request.
  */
 export interface GraphQLContext {
   user: AuthenticatedUser;
@@ -27,6 +27,14 @@ export interface GraphQLContext {
   config: AppConfig;
   /** Set once by Viewer's resolver; undefined until then. */
   analyticsRunId?: string;
+  /** Set before awaiting so aliased Viewer.analytics fields share one read. */
+  analyticsCurrentRun?: Promise<CurrentRunDoc | null>;
+  /** Request-local Promise caches coalesce concurrently resolved analytics fields. */
+  analyticsReadCache: {
+    summaries: Map<string, Promise<Record<string, unknown> | null>>;
+    dailySeries: Map<string, Promise<DailyDocument[]>>;
+    strainWorkoutDays: Map<string, Promise<DailyDocument[]>>;
+  };
   /** Wrap a resolver's async work with the configured wall-clock timeout. */
   withTimeout: <T>(work: Promise<T>, fieldName: string) => Promise<T>;
 }
@@ -64,6 +72,11 @@ export async function buildContext(
     controlDb: mongoClient.db(CONTROL_DB_NAME),
     userDb: userDb(mongoClient, user.userId),
     config,
+    analyticsReadCache: {
+      summaries: new Map(),
+      dailySeries: new Map(),
+      strainWorkoutDays: new Map(),
+    },
     withTimeout: withTimeoutFactory(config.resolverTimeoutMs),
   };
 }

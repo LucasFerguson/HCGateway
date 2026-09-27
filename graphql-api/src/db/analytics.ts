@@ -85,45 +85,131 @@ export interface DailyDocument extends Document {
   dayView?: Record<string, unknown> | null;
 }
 
-export async function readDaily(
-  db: Db,
-  runId: string,
-  startDate?: string,
-  endDate?: string,
-): Promise<DailyDocument[]> {
-  const query: Record<string, unknown> = { runId };
-  if (startDate || endDate) {
-    const dateFilter: Record<string, string> = {};
-    if (startDate) dateFilter.$gte = startDate;
-    if (endDate) dateFilter.$lte = endDate;
-    query.date = dateFilter;
-  }
-  const docs = await db
-    .collection(DAILY)
-    .find(query)
-    .sort({ date: 1 })
-    .toArray();
-  return docs.map((doc) => doc.data as DailyDocument);
+export interface DailyDateRange {
+  startDate?: string;
+  endDateExclusive?: string;
 }
 
-export async function readDailyOne(db: Db, runId: string, date: string): Promise<DailyDocument | null> {
-  const doc = await db.collection(DAILY).findOne({ runId, date });
-  return (doc?.data as DailyDocument) ?? null;
+export type DailySeriesField =
+  | "sleepDebt"
+  | "sleepConsistency"
+  | "healthspan"
+  | "steps"
+  | "activeCalories"
+  | "totalCalories"
+  | "restingHeartRate"
+  | "heartRateVariability"
+  | "weight"
+  | "strain"
+  | "recovery";
+
+const DAILY_SERIES_FIELDS: DailySeriesField[] = [
+  "sleepDebt",
+  "sleepConsistency",
+  "healthspan",
+  "steps",
+  "activeCalories",
+  "totalCalories",
+  "restingHeartRate",
+  "heartRateVariability",
+  "weight",
+  "strain",
+  "recovery",
+];
+
+function dailyQuery(runId: string, range: DailyDateRange = {}): Record<string, unknown> {
+  const query: Record<string, unknown> = { runId };
+  if (range.startDate || range.endDateExclusive) {
+    const dateFilter: Record<string, string> = {};
+    if (range.startDate) dateFilter.$gte = range.startDate;
+    if (range.endDateExclusive) dateFilter.$lt = range.endDateExclusive;
+    query.date = dateFilter;
+  }
+  return query;
+}
+
+function dailyData(doc: Document): DailyDocument {
+  return { ...((doc.data as DailyDocument | undefined) ?? {}), date: String(doc.date) };
+}
+
+/**
+ * Read the compact prepared series shared by the nested daily/trend fields.
+ * The deliberately fixed projection lets one request-scoped read serve all
+ * series without ever materializing the much larger dayView or workouts.
+ */
+export async function readDailySeries(
+  db: Db,
+  runId: string,
+  range: DailyDateRange = {},
+): Promise<DailyDocument[]> {
+  const projection: Record<string, 0 | 1> = { _id: 0, date: 1 };
+  for (const field of DAILY_SERIES_FIELDS) projection[`data.${field}`] = 1;
+  const docs = await db
+    .collection(DAILY)
+    .find(dailyQuery(runId, range), { projection })
+    .sort({ date: 1 })
+    .toArray();
+  return docs.map(dailyData);
+}
+
+export async function readDayViews(
+  db: Db,
+  runId: string,
+  range: DailyDateRange = {},
+): Promise<DailyDocument[]> {
+  const docs = await db
+    .collection(DAILY)
+    .find(dailyQuery(runId, range), { projection: { _id: 0, date: 1, "data.dayView": 1 } })
+    .sort({ date: 1 })
+    .toArray();
+  return docs.map(dailyData);
+}
+
+export async function readDayViewOne(db: Db, runId: string, date: string): Promise<DailyDocument | null> {
+  const doc = await db.collection(DAILY).findOne(
+    { runId, date },
+    { projection: { _id: 0, date: 1, "data.dayView": 1 } },
+  );
+  return doc ? dailyData(doc) : null;
+}
+
+export async function readStrainWorkoutDays(
+  db: Db,
+  runId: string,
+  range: DailyDateRange = {},
+): Promise<DailyDocument[]> {
+  const docs = await db
+    .collection(DAILY)
+    .find(dailyQuery(runId, range), { projection: { _id: 0, date: 1, "data.strainWorkouts": 1 } })
+    .sort({ date: 1 })
+    .toArray();
+  return docs.map(dailyData);
+}
+
+export async function readLatestDailyField(
+  db: Db,
+  runId: string,
+  field: DailySeriesField,
+  requiredNestedField?: string,
+): Promise<Record<string, unknown> | null> {
+  const query: Record<string, unknown> = { runId, [`data.${field}`]: { $exists: true, $ne: null } };
+  if (requiredNestedField) {
+    query[`data.${field}.${requiredNestedField}`] = { $exists: true, $ne: null };
+  }
+  const doc = await db.collection(DAILY).findOne(query, {
+    projection: { _id: 0, date: 1, [`data.${field}`]: 1 },
+    sort: { date: -1 },
+  });
+  if (!doc) return null;
+  return ((doc.data as Record<string, unknown> | undefined)?.[field] as Record<string, unknown> | undefined) ?? null;
 }
 
 export async function readSleepEvents(
   db: Db,
   runId: string,
-  startDate?: string,
-  endDate?: string,
+  range: DailyDateRange = {},
 ): Promise<Record<string, unknown>[]> {
-  const query: Record<string, unknown> = { runId };
-  if (startDate || endDate) {
-    const dateFilter: Record<string, string> = {};
-    if (startDate) dateFilter.$gte = startDate;
-    if (endDate) dateFilter.$lte = endDate;
-    query.date = dateFilter;
-  }
+  const query = dailyQuery(runId, range);
   const docs = await db.collection(SLEEP_EVENTS).find(query).sort({ date: 1 }).toArray();
   return docs.map((doc) => doc.data as Record<string, unknown>);
 }
