@@ -1,5 +1,5 @@
 /**
- * GraphQL SDL for the HCGateway read-only API.
+ * GraphQL SDL for the HCGateway read API.
  *
  * Adapted from doc/graphql-schema-design.md, but verified and corrected
  * against real documents in the running MongoDB instance and the Python
@@ -98,6 +98,37 @@ export const typeDefs = /* GraphQL */ `
     sources: SourceCatalog!
     ingestion: IngestionStatus!
     config: AnalyticsConfig!
+    habits(range: TimeRange): [Habit!]!
+  }
+
+  # ---------------------------------------------------------------------
+  # Habits - imported WHOOP journal questions and per-cycle responses.
+  # These are source records, not derived analytics: answeredYes preserves
+  # the question's literal yes/no response and must not be relabeled as a
+  # generic success/completion (some questions describe symptoms).
+  # ---------------------------------------------------------------------
+
+  type Habit {
+    id: ID!
+    source: String!
+    question: String!
+    firstSeenDate: Date!
+    lastSeenDate: Date!
+    entryCount: Int!
+    entries: [HabitEntry!]!
+  }
+
+  type HabitEntry {
+    id: ID!
+    source: String!
+    date: Date!
+    cycleStartAt: DateTime!
+    cycleEndAt: DateTime!
+    cycleStartLocal: String!
+    cycleEndLocal: String!
+    sourceUtcOffsetMinutes: Int!
+    answeredYes: Boolean!
+    notes: String
   }
 
   # ---------------------------------------------------------------------

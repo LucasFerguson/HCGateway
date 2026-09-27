@@ -14,6 +14,20 @@ WHOOP, Pixel/Fitbit, or Google Fit records itself.
 All endpoints require `Authorization: Bearer <token>` and are scoped to the
 authenticated user's `hcgateway_<user-id>` database.
 
+### Imported WHOOP journal habits (GraphQL)
+
+WHOOP journal questions and responses are available through
+`viewer.habits(range: TimeRange)`. A habit is the literal source question, and
+its nested entries are the yes/no responses whose physiological-cycle end
+falls within the requested half-open instant range. All known questions remain
+in the result even when `entries` is empty for that range.
+
+Use `answeredYes` literally. It is not a generic completion or success flag:
+for symptom questions such as “Experienced a headache?”, `true` records that
+the symptom occurred. `HabitEntry.date` is the source-local date on which the
+WHOOP cycle ended; UTC instants, source-local timestamp text, and the recorded
+UTC offset are also retained for unambiguous rendering.
+
 ### `GET /api/v2/analytics/day?date=YYYY-MM-DD&radius=7`
 
 This is the preferred endpoint for the health dashboard's day screen. It returns one

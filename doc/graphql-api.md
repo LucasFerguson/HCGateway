@@ -39,11 +39,67 @@ type Viewer {
   sources: SourceCatalog!     # inventory + observed devices
   ingestion: IngestionStatus! # phone sync heartbeat, analytics job, current run
   config: AnalyticsConfig!    # read-only mirror of GET /analytics/config
+  habits(range: TimeRange): [Habit!]! # imported WHOOP journal questions/responses
 }
 ```
 
 See `graphql-api/src/schema/typeDefs.ts` for the complete SDL - it is the
 source of truth; this document is a pointer, not a duplicate.
+
+## WHOOP journal habits
+
+`Viewer.habits(range:)` exposes the WHOOP journal export stored in the
+authenticated user's `habitDefinitions` and `habitEntries` collections. The
+range is applied to each response's cycle-end instant with the usual half-open
+`start <= cycleEndAt < endExclusive` semantics. Every known question is
+returned even when it has no response in the selected range, which lets a
+frontend distinguish “no” from “not asked/not recorded.”
+
+The response field is intentionally named `answeredYes`, not `completed`:
+questions such as “Experienced a headache?” describe symptoms, so a yes value
+is not necessarily a desirable habit completion. Each entry also exposes its
+source local cycle timestamps, canonical UTC instants, local end date, source
+UTC offset, and optional notes.
+
+Imports are idempotent and run separately from the read-only GraphQL service.
+After rebuilding the Python image, import an export from the repository root:
+
+```bash
+docker exec -i hcgateway_api \
+  python -m analytics_engine.whoop_journal \
+  --username lucas \
+  --source-export-date 2026-08-24 \
+  < raw-data/whoop/2026-08-24/journal_entries.csv
+```
+
+The importer logs only aggregate row/question counts. Raw exports remain
+ignored by Git and must not be copied into an image or committed.
+
+Example frontend query:
+
+```graphql
+query Habits($range: TimeRange) {
+  viewer {
+    habits(range: $range) {
+      id
+      source
+      question
+      firstSeenDate
+      lastSeenDate
+      entryCount
+      entries {
+        id
+        date
+        cycleEndAt
+        cycleEndLocal
+        sourceUtcOffsetMinutes
+        answeredYes
+        notes
+      }
+    }
+  }
+}
+```
 
 The analytics root and date/month-keyed analytics buckets expose stable cache
 identities scoped by authenticated account and prepared run. Shared metric

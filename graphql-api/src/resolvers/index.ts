@@ -5,6 +5,7 @@ import { analyticsResolvers } from "./analytics.js";
 import { sourceCatalogResolvers } from "./sourceCatalog.js";
 import { ingestionResolvers } from "./ingestion.js";
 import { analyticsConfigResolvers } from "./analyticsConfig.js";
+import { habitResolvers } from "./habits.js";
 
 function mergeResolvers(...groups: Record<string, unknown>[]): Record<string, Record<string, unknown>> {
   const merged: Record<string, Record<string, unknown>> = {};
@@ -27,5 +28,6 @@ export const resolvers = {
     sourceCatalogResolvers,
     ingestionResolvers,
     analyticsConfigResolvers,
+    habitResolvers,
   ),
 };
