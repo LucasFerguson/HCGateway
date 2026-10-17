@@ -7,6 +7,7 @@ coverage is insufficient.
 """
 
 import math
+from bisect import bisect_right
 from collections import defaultdict
 
 from .time_utils import parse_instant as _instant, split_by_local_day, zone_info
@@ -293,10 +294,19 @@ def calculate_strain(samples, time_zone="UTC", zone_thresholds=None, resting_hr=
     for date in sorted(by_day):
         summary = _summarize_segments(by_day[date], DAY_MIN_SPAN_SECONDS, DAY_MIN_COVERAGE_RATIO, invalid)
         result["daily"].append({"date": date, **summary})
+    # Segments come from consecutive, sorted, de-duplicated samples, so they
+    # are in time order and never overlap. Each workout can binary-search to
+    # its first overlapping segment instead of scanning all of them, which
+    # was workouts x segments (535 x ~6M for the primary account) and made a
+    # full recompute take ~17 minutes.
+    segment_ends = [segment["end"] for segment in all_segments]
     for workout in workouts or []:
         start, end = _instant(workout["startAt"]), _instant(workout["endAt"])
         clipped = []
-        for segment in all_segments:
+        index = bisect_right(segment_ends, start)
+        while index < len(all_segments) and all_segments[index]["start"] < end:
+            segment = all_segments[index]
+            index += 1
             clip_start, clip_end = max(start, segment["start"]), min(end, segment["end"])
             if clip_start < clip_end:
                 clipped.append({**segment, "start": clip_start, "end": clip_end,

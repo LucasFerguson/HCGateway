@@ -60,6 +60,47 @@ class StrainTests(unittest.TestCase):
         self.assertIsNone(result["workouts"][1]["score"])
         self.assertIn("observation_span_too_short", result["workouts"][1]["quality"]["reasons"])
 
+    def test_workout_clipping_matches_a_full_scan(self):
+        # The workout loop binary-searches segments; it must clip exactly
+        # what scanning every segment would, including workouts that start
+        # before, end after, or fall between observations, and day splits.
+        import random
+        from analytics_engine import strain as strain_module
+
+        rng = random.Random(7)
+        base = dt.datetime(2026, 1, 1, 4, tzinfo=dt.timezone.utc)
+        observations, offset = [], 0
+        for _ in range(3000):
+            offset += rng.choice([1, 5, 30, 60, 600, 3600])
+            observations.append({
+                "observedAt": (base + dt.timedelta(seconds=offset)).isoformat().replace("+00:00", "Z"),
+                "bpm": rng.randint(60, 180),
+            })
+        workouts = []
+        for index in range(60):
+            start = base + dt.timedelta(seconds=rng.randint(-3600, offset + 3600))
+            end = start + dt.timedelta(seconds=rng.randint(60, 4 * 3600))
+            workouts.append({"id": str(index), "startAt": start.isoformat().replace("+00:00", "Z"),
+                             "endAt": end.isoformat().replace("+00:00", "Z")})
+
+        result = calculate_strain(observations, zone_thresholds=THRESHOLDS,
+                                  time_zone="America/Chicago", workouts=workouts)
+
+        normalized, _ = strain_module._normalize_samples(observations)
+        _, segments = strain_module._segments(normalized, THRESHOLDS, "America/Chicago")
+        for workout, item in zip(workouts, result["workouts"]):
+            start, end = strain_module._instant(workout["startAt"]), strain_module._instant(workout["endAt"])
+            clipped = []
+            for segment in segments:
+                clip_start, clip_end = max(start, segment["start"]), min(end, segment["end"])
+                if clip_start < clip_end:
+                    clipped.append({**segment, "start": clip_start, "end": clip_end,
+                                    "seconds": (clip_end - clip_start).total_seconds()})
+            expected = strain_module._summarize_segments(
+                clipped, strain_module.WORKOUT_MIN_SPAN_SECONDS,
+                strain_module.WORKOUT_MIN_COVERAGE_RATIO, bounds=(start, end))
+            self.assertEqual({k: v for k, v in item.items() if k not in ("id", "startAt", "endAt")}, expected)
+
     def test_workout_coverage_includes_missing_edges(self):
         observations = samples("2026-01-01T09:20:00Z", 20)
         workout = {"id": "partial", "startAt": "2026-01-01T09:00:00Z", "endAt": "2026-01-01T10:00:00Z"}
