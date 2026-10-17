@@ -90,11 +90,17 @@ if [ -n "$SDK_DIR" ]; then
     warn "platforms;android-35 missing"
     PROBLEMS+=("Run: sdkmanager --install \"platforms;android-35\"")
   fi
-  if ls "$SDK_DIR"/build-tools/35.* >/dev/null 2>&1; then
-    ok "build-tools;35.x present"
+  # Check the build-tools version the project actually uses: an
+  # android.buildToolsVersion override in gradle.properties, else the default
+  # in android/build.gradle.
+  BT_VER="$(grep -E '^android\.buildToolsVersion=' "$ANDROID_DIR/gradle.properties" 2>/dev/null | head -1 | cut -d= -f2-)"
+  [ -n "$BT_VER" ] || BT_VER="$(grep -oE "buildToolsVersion.*'[0-9.]+'" "$ANDROID_DIR/build.gradle" 2>/dev/null | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)"
+  [ -n "$BT_VER" ] || BT_VER="34.0.0"
+  if [ -d "$SDK_DIR/build-tools/$BT_VER" ]; then
+    ok "build-tools;$BT_VER present"
   else
-    warn "build-tools;35.x missing"
-    PROBLEMS+=("Run: sdkmanager --install \"build-tools;35.0.0\"")
+    warn "build-tools;$BT_VER missing"
+    PROBLEMS+=("Run: sdkmanager --install \"build-tools;$BT_VER\"")
   fi
 else
   fail "Android SDK not found (ANDROID_HOME unset and no valid sdk.dir in app/android/local.properties)"
