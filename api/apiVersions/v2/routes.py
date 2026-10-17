@@ -14,6 +14,8 @@ ph = PasswordHasher()
 
 import secrets, datetime
 
+from auth_sessions import create_session, refresh_session, revoke_session, user_id_for_token
+
 from analytics_engine.context import AnalyticsContext, context_for_user, validate_context
 from analytics_engine.crypto import PLAIN_STORAGE_FORMAT, cipher_for_user, decode_stored_json
 from analytics_engine.day_dashboard import empty_day
@@ -25,30 +27,52 @@ from analytics_engine.time_utils import local_today, parse_instant
 
 v2 = Blueprint('v2', __name__, url_prefix='/api/v2/')
 
-@v2.before_request
-def before_request():
-    if request.endpoint == 'v2.login' or request.endpoint == 'v2.refresh':
-        return
-    
+def _bearer_token():
     authorization = request.headers.get('Authorization', '')
     scheme, separator, token = authorization.partition(' ')
     if not separator or scheme.lower() != 'bearer' or not token.strip():
+        return None
+    return token.strip()
+
+@v2.before_request
+def before_request():
+    if request.endpoint in ('v2.login', 'v2.refresh', 'v2.signup'):
+        return
+
+    token = _bearer_token()
+    if not token:
         return jsonify({'error': 'valid bearer token required'}), 401
-    token = token.strip()
-    db = mongo['hcgateway']
-    usrStore = db['users']
 
-    user = usrStore.find_one({'token': token})
-
-    if not user:
+    user_id = user_id_for_token(mongo['hcgateway'], token)
+    if not user_id:
         return jsonify({'error': 'invalid token'}), 401
-    
-    if datetime.datetime.now() > user['expiry']:
-        return jsonify({'error': 'token expired. Use /api/v2/login to reauthenticate.'}), 401
-    
-    g.user = user['_id']
+
+    g.user = user_id
 
     return
+
+@v2.route("/signup", methods=['POST'])
+def signup():
+    body = request.get_json(silent=True) or {}
+    username = body.get('username')
+    password = body.get('password')
+    if not isinstance(username, str) or not isinstance(password, str):
+        return jsonify({'error': 'invalid request'}), 400
+    username = username.strip()
+    if not username or len(username) > 64:
+        return jsonify({'error': 'username must be 1-64 characters'}), 400
+    if len(password) < 8:
+        return jsonify({'error': 'password must be at least 8 characters'}), 400
+
+    db = mongo['hcgateway']
+    usrStore = db['users']
+    if usrStore.find_one({'username': username}, {'_id': 1}):
+        return jsonify({'error': 'that username is taken'}), 409
+
+    user_id = str(ObjectId())
+    usrStore.insert_one({'_id': user_id, 'username': username, 'password': ph.hash(password)})
+
+    return jsonify(create_session(db, user_id, client=body.get('client'))), 201
 
 @v2.route("/login", methods=['POST'])
 def login(): 
@@ -64,20 +88,8 @@ def login():
     user = usrStore.find_one({'username': username})
 
     if not user:
-        user = usrStore.insert_one({'username': username, 'password': ph.hash(password)}).inserted_id
-        usrStore.insert_one({'_id': str(user), 'username': username, 'password': ph.hash(password)})
-        usrStore.delete_one({'_id': ObjectId(user)})
-
-        token = secrets.token_urlsafe(32)
-        refresh = secrets.token_urlsafe(32)
-        expiryDate = datetime.datetime.now() + datetime.timedelta(hours=12)
-        usrStore.update_one({'_id': str(user)}, {"$set": {'token': token, 'refresh': refresh, 'expiry': expiryDate}})
-
-        return jsonify({
-            "token": token,
-            "refresh": refresh,
-            "expiry": expiryDate.isoformat()
-        }), 201
+        # Accounts are created on the dashboard website (/signup), not here.
+        return jsonify({'error': 'no account with that username. Create one on the dashboard website first.'}), 404
     
     try:
         ph.verify(user['password'], password)
@@ -89,25 +101,8 @@ def login():
             usrStore.update_one({'username': username}, {"$set": {'fcmToken': fcmToken}})
         except:
             return jsonify({'error': 'failed to update fcm token'}), 500
-        
-    sessid = user['_id']
 
-    if not "expiry" in user or datetime.datetime.now() > user['expiry']:
-        token = secrets.token_urlsafe(32)
-        refresh = secrets.token_urlsafe(32)
-        expiryDate = datetime.datetime.now() + datetime.timedelta(hours=12)
-        usrStore.update_one({'_id': sessid}, {"$set": {'token': token, 'refresh': refresh, 'expiry': expiryDate}})
-
-    else:
-        token = user['token']
-        refresh = user['refresh']
-        expiryDate = user['expiry']
-
-    return jsonify({
-            "token": token,
-            "refresh": refresh,
-            "expiry": expiryDate.isoformat()
-    }), 201
+    return jsonify(create_session(db, user['_id'], client=request.json.get('client'))), 201
 
 
 @v2.route("/refresh", methods=['POST'])
@@ -115,40 +110,16 @@ def refresh():
     if not request.json or not 'refresh' in request.json:
         return jsonify({'error': 'invalid request'}), 400
 
-    refresh = request.json['refresh']
-
-    db = mongo['hcgateway']
-    usrStore = db['users']
-
-    user = usrStore.find_one({'refresh': refresh})
-
-    if not user:
+    session = refresh_session(mongo['hcgateway'], request.json['refresh'])
+    if not session:
         return jsonify({'error': 'invalid refresh token'}), 403
-    
-    token = secrets.token_urlsafe(32)
-    # refresh = secrets.token_urlsafe(32) # disable refresh token rotation- design flaw, see #35
-    expiryDate = datetime.datetime.now() + datetime.timedelta(hours=12)
-    usrStore.update_one({'_id': user['_id']}, {"$set": {'token': token, 'refresh': refresh, 'expiry': expiryDate}})
 
-    return jsonify({
-            "token": token,
-            "refresh": refresh,
-            "expiry": expiryDate.isoformat()
-    }), 200
+    return jsonify(session), 200
 
 @v2.route("/revoke", methods=['DELETE'])
 def revoke():
-    token = request.headers.get('Authorization').split(' ')[1]
-
-    db = mongo['hcgateway']
-    usrStore = db['users']
-
-    user = usrStore.find_one({'token': token})
-
-    if not user:
-        return jsonify({'error': 'invalid refresh token'}), 403
-
-    usrStore.update_one({'_id': user['_id']}, {"$unset": {'token': 1, 'refresh': 1, 'expiry': 1}})
+    # before_request has already rejected a missing or invalid token.
+    revoke_session(mongo['hcgateway'], _bearer_token())
 
     return jsonify({
             "success": True

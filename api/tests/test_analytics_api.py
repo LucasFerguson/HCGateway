@@ -20,12 +20,6 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
 
         cls.app = app
 
-    @classmethod
-    def tearDownClass(cls):
-        from apiVersions.v2.routes import mongo
-
-        mongo.close()
-
     def setUp(self):
         self.mongo = MongoClient(os.environ["TEST_MONGO_URI"])
         self.user_id = "test-api-" + uuid.uuid4().hex

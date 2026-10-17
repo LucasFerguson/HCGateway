@@ -1,26 +1,23 @@
+import { createHash } from "node:crypto";
 import { MongoClient } from "mongodb";
 import { GraphQLError } from "graphql";
 import { CONTROL_DB_NAME } from "../db/mongo.js";
 
 /**
- * Bearer-token validation, mirrored from api/apiVersions/v2/routes.py's
- * `before_request` hook:
+ * Bearer-token validation, mirrored from api/auth_sessions.py's
+ * `user_id_for_token` (used by the Flask `before_request` hook):
  *
- *   user = usrStore.find_one({'token': token})
- *   if not user: 401
- *   if datetime.datetime.now() > user['expiry']: 401
- *   g.user = user['_id']
+ *   1. a per-device session whose `tokenHash` is sha256(token), or
+ *   2. a legacy single token on the user document that hasn't expired.
  *
  * This is the one deliberately duplicated piece of Python logic (per
- * doc/graphql-schema-design.md) - a single small collection lookup, kept
- * intentionally in sync with the Flask hook rather than shared as a library.
+ * doc/graphql-schema-design.md) - a small collection lookup, kept
+ * intentionally in sync with the Python rather than shared as a library.
  *
- * The Flask container's `datetime.datetime.now()` is naive and, because the
- * container runs in UTC, is equivalent to UTC "now". Node's `Date` read back
- * from the driver for a naive-UTC BSON datetime is a normal UTC-based Date,
- * so `new Date() > expiry` reproduces the same comparison exactly as long as
- * this process also runs in UTC (it does, as a sibling container in the same
- * Compose stack).
+ * For the legacy path, the Flask container's `datetime.datetime.now()` is
+ * naive and, because the container runs in UTC, equivalent to UTC "now", so
+ * `new Date() > expiry` reproduces the same comparison as long as this
+ * process also runs in UTC (it does, as a sibling container).
  */
 
 export interface AuthenticatedUser {
@@ -43,7 +40,8 @@ function extractBearerToken(authorizationHeader: string | undefined): string | n
 }
 
 /**
- * Validate the request's bearer token against hcgateway.users. Throws
+ * Validate the request's bearer token against hcgateway.sessions (then the
+ * legacy token on hcgateway.users). Throws
  * AuthError on any failure - missing header, unknown token, or expired
  * token - exactly mirroring the Flask hook's three rejection cases. Never
  * logs the token or any user field.
@@ -57,8 +55,16 @@ export async function authenticate(
     throw new AuthError("valid bearer token required");
   }
 
-  const usersCollection = mongoClient.db(CONTROL_DB_NAME).collection("users");
-  const user = await usersCollection.findOne<{ _id: string; expiry?: Date }>({ token });
+  const db = mongoClient.db(CONTROL_DB_NAME);
+  const tokenHash = createHash("sha256").update(token, "utf8").digest("hex");
+  const session = await db
+    .collection("sessions")
+    .findOne<{ userId: string }>({ tokenHash }, { projection: { userId: 1 } });
+  if (session) {
+    return { userId: String(session.userId) };
+  }
+
+  const user = await db.collection("users").findOne<{ _id: string; expiry?: Date }>({ token });
 
   if (!user) {
     throw new AuthError("invalid token");
