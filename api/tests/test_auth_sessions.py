@@ -103,5 +103,24 @@ class AuthSessionTests(unittest.TestCase):
         self.assertEqual(again.status_code, 200)
 
 
+    def test_change_password(self):
+        session = self.signup()
+        phone = self.login()
+        auth = {"Authorization": "Bearer " + session["token"]}
+        self.assertEqual(self.client.get("/api/v2/account", headers=auth).get_json(), {"username": self.username})
+
+        wrong = self.client.post("/api/v2/account/password", headers=auth, json={"currentPassword": "nope", "newPassword": "brand new pass"})
+        self.assertEqual(wrong.status_code, 403)
+        short = self.client.post("/api/v2/account/password", headers=auth, json={"currentPassword": self.password, "newPassword": "short"})
+        self.assertEqual(short.status_code, 400)
+        ok = self.client.post("/api/v2/account/password", headers=auth, json={"currentPassword": self.password, "newPassword": "brand new pass"})
+        self.assertEqual(ok.status_code, 200)
+
+        old = self.client.post("/api/v2/login", json={"username": self.username, "password": self.password})
+        self.assertEqual(old.status_code, 403)
+        self.password = "brand new pass"
+        self.login()
+        self.assertEqual(self.status(phone["token"]), 200)
+
 if __name__ == "__main__":
     unittest.main()

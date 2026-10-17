@@ -125,6 +125,37 @@ def revoke():
             "success": True
     }), 200
 
+@v2.get("/account")
+def account():
+    user = mongo['hcgateway']['users'].find_one({'_id': g.user}, {'username': 1})
+    if not user:
+        return jsonify({'error': 'account not found'}), 404
+    return jsonify({'username': user['username']}), 200
+
+@v2.route("/account/password", methods=['POST'])
+def change_password():
+    body = request.get_json(silent=True) or {}
+    current = body.get('currentPassword')
+    new = body.get('newPassword')
+    if not isinstance(current, str) or not isinstance(new, str):
+        return jsonify({'error': 'invalid request'}), 400
+    if len(new) < 8:
+        return jsonify({'error': 'password must be at least 8 characters'}), 400
+
+    usrStore = mongo['hcgateway']['users']
+    user = usrStore.find_one({'_id': g.user}, {'password': 1})
+    if not user:
+        return jsonify({'error': 'account not found'}), 404
+    try:
+        ph.verify(user['password'], current)
+    except:
+        return jsonify({'error': 'current password is wrong'}), 403
+
+    # Other sessions (the phone, other browsers) stay signed in: a session is
+    # independent of the password once it exists.
+    usrStore.update_one({'_id': g.user}, {'$set': {'password': ph.hash(new)}})
+    return jsonify({'success': True}), 200
+
 @v2.post("/sync/<method>")
 def sync(method):
     if not method:
