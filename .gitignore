@@ -99,3 +99,8 @@ graphql-api/dist/
 
 # Generated reference snapshots (may contain sampled live data)
 doc/generated/
+
+# Published Android APKs and their latest.json (written by
+# scripts/publish-apk.sh, served by the dashboard). Keep the folder tracked.
+/releases/*
+!/releases/.gitkeep
