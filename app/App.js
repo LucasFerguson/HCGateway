@@ -1018,7 +1018,7 @@ export default Sentry.wrap(function App() {
       Toast.show({
         type: 'error',
         text1: "Login failed",
-        text2: err.message
+        text2: (err.response && err.response.data && err.response.data.error) || err.message
       })
     }
   }
@@ -1489,6 +1489,18 @@ export default Sentry.wrap(function App() {
             <Button
               title="Logout"
               onPress={async () => {
+                // End this phone's session on the server; other devices stay
+                // signed in. Best effort: log out locally even if offline.
+                if (login) {
+                  try {
+                    await axios.delete(`${apiBase}/api/v2/revoke`, {
+                      headers: { Authorization: `Bearer ${login}` },
+                      timeout: 5000,
+                    });
+                  } catch (err) {
+                    console.log('Session revoke failed', err.message);
+                  }
+                }
                 await clearAuthSession();
                 Toast.show({
                   type: 'success',
@@ -1508,7 +1520,7 @@ export default Sentry.wrap(function App() {
             textAlign: 'center',
           }}>Login</Text>
 
-          <Text style={{ marginVertical: 10 }}>If you don't have an account, one will be made for you when logging in.</Text>
+          <Text style={{ marginVertical: 10 }}>Don't have an account? Create one on the dashboard website, then log in here.</Text>
 
           <TextInput
             style={styles.input}
