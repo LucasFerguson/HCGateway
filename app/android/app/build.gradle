@@ -94,8 +94,8 @@ android {
         applicationId 'org.lucasferguson.hcgateway'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 2
-        versionName "2.2.2"
+        versionCode 3
+        versionName "2.3.0"
     }
     signingConfigs {
         debug {

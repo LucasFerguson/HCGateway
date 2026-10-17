@@ -2,7 +2,7 @@
   "expo": {
     "name": "HCGateway",
     "slug": "hcgateway",
-    "version": "2.2.2",
+    "version": "2.3.0",
     "plugins": [
       "expo-health-connect",
       [
@@ -39,7 +39,7 @@
       "backgroundColor": "#ffffff"
     },
     "android": {
-      "versionCode": 2,
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -76,6 +76,7 @@
         "android.permission.health.READ_POWER",
         "android.permission.health.READ_RESPIRATORY_RATE",
         "android.permission.health.READ_RESTING_HEART_RATE",
+        "android.permission.health.READ_SKIN_TEMPERATURE",
         "android.permission.health.READ_SLEEP",
         "android.permission.health.READ_SPEED",
         "android.permission.health.READ_STEPS",
