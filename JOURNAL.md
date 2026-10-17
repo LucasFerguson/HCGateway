@@ -4,6 +4,55 @@ A running log of key points in this project's history, newest first.
 
 ---
 
+## 2026-10-17
+
+A big day: browser login, per-device sessions, password changes, HRV and skin
+temperature collection. It also turned up several infrastructure problems on
+the homelab host that are worth writing down, because some are strange.
+
+**MongoDB crashed six times in two minutes (18:48 to 18:50 UTC).** Each time
+mongod aborted with a fatal assertion: WiredTiger error 24, "Too many open
+files." The `hcgateway_db` container runs with Docker's default soft limit of
+1,024 open files, while MongoDB recommends 64,000, and WiredTiger keeps one
+file per collection and per index (417 data files already). A backend test run
+that created extra test databases pushed it over. Docker's restart policy
+brought it back each time, and record counts were checked afterwards and
+matched exactly. Fix still pending: add `ulimits: nofile: 64000` to the `db`
+service and recreate the container. This limit will be hit again as accounts
+are added.
+
+**The Docker daemon itself segfaulted (19:13 UTC)** in the middle of an image
+build, and took every container down with it: both dashboards, all HCGateway
+services and MongoDB. They did not come back on their own despite
+`restart: unless-stopped`; only dbgate did. The crash was a general-protection
+fault inside Go's map hashing (`aeshashbody`) in buildkit's mount code, which
+looks more like the CPU state being corrupted than a normal bug. This host runs
+the 7.0.2 (pve) kernel that `docker-compose.yml` already flags for crashing
+userspace allocators (MongoDB's TCMalloc, SERVER-121912), so it is probably the
+same kernel problem showing up in a different program. It was the only daemon
+crash in 30 days of logs, and the retried build went through fine. Recovery
+was starting the database first, then everything else. Upgrading the host
+kernel is the real fix.
+
+**The disk is 88% full (5.1 GB free of 45 GB).** Docker uses 19 GB, of which
+the build cache (4.8 GB) and unused images (1.9 GB) are reclaimable. MongoDB
+lives on this disk, so running out of space would take the database down.
+This also blocks installing an Android build toolchain on the server, which
+needs roughly 6 to 8 GB.
+
+**Full analytics recomputes took 18 minutes, not one.** The run documents made
+runs look like 60 to 80 seconds, but their `startedAt` is written after the
+computation, so it only ever measured the save step. A py-spy dump of the live
+worker showed the time going to strain: every workout scanned all 6.3 million
+heart-rate segments. A binary search brought a real run down to 4 minutes 46
+seconds with identical output.
+
+**WHOOP stopped writing to Health Connect on 2026-10-08.** Resting heart rate,
+SpO2 and respiratory rate only ever came from WHOOP, so all three have had no
+new data since then. Worth checking the WHOOP app's Health Connect permissions.
+
+---
+
 ## 2026-08-24
 
 Today, the 24th of August, the project took a massive leap forward: the
