@@ -276,3 +276,61 @@ class HealthspanAndPipelineTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NightlyHrvTests(unittest.TestCase):
+    def setUp(self):
+        from analytics_engine.context import AnalyticsContext
+
+        self.context = AnalyticsContext(homeTimeZone="America/Chicago")
+        # Main sleep 22:00-06:00 local (CDT, UTC-5), waking on 2026-10-13.
+        self.events = [{
+            "date": "2026-10-13",
+            "role": "main",
+            "primary": {"startAt": "2026-10-13T03:00:00Z", "endAt": "2026-10-13T11:00:00Z"},
+        }]
+
+    def reading(self, at, ms, source="com.fitbit.FitbitMobile"):
+        return {"id": at, "source": source, "observedAt": at, "milliseconds": ms}
+
+    def test_a_night_spanning_midnight_is_one_wake_date(self):
+        from analytics_engine.pipeline import aggregate_nightly_hrv
+
+        readings = [
+            self.reading("2026-10-13T04:00:00Z", 100),  # 23:00 local, Oct 12
+            self.reading("2026-10-13T09:00:00Z", 140),  # 04:00 local, Oct 13
+        ]
+        daily = aggregate_nightly_hrv(readings, self.events, self.context)["daily"]
+        self.assertEqual([day["date"] for day in daily], ["2026-10-13"])
+        self.assertEqual(daily[0]["value"], 120)
+        self.assertEqual(daily[0]["qualityFlags"], [])
+
+    def test_readings_outside_main_sleep_are_left_out(self):
+        from analytics_engine.pipeline import aggregate_nightly_hrv
+
+        readings = [
+            self.reading("2026-10-13T05:00:00Z", 100),
+            self.reading("2026-10-13T13:00:00Z", 30),  # 08:00 local, after waking
+        ]
+        day = aggregate_nightly_hrv(readings, self.events, self.context)["daily"][0]
+        self.assertEqual(day["value"], 100)
+        self.assertEqual(day["bySource"][0]["observationCount"], 1)
+
+    def test_a_night_without_main_sleep_uses_all_readings_and_is_flagged(self):
+        from analytics_engine.pipeline import aggregate_nightly_hrv
+
+        readings = [
+            self.reading("2026-10-15T05:00:00Z", 80),
+            self.reading("2026-10-15T06:00:00Z", 120),
+        ]
+        day = aggregate_nightly_hrv(readings, self.events, self.context)["daily"][0]
+        self.assertEqual(day["date"], "2026-10-15")
+        self.assertEqual(day["value"], 100)
+        self.assertEqual(day["qualityFlags"], ["outside_main_sleep"])
+
+    def test_no_readings_means_no_nights(self):
+        from analytics_engine.pipeline import aggregate_nightly_hrv
+
+        result = aggregate_nightly_hrv([], self.events, self.context)
+        self.assertEqual(result["daily"], [])
+        self.assertIsNone(result["overview"]["latest"])

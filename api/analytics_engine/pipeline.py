@@ -1,4 +1,4 @@
-"""Health analytics v8.6: prepared health views plus provisional Recovery and Strain."""
+"""Health analytics v8.7: prepared health views plus provisional Recovery and Strain."""
 
 import datetime as dt
 import hashlib
@@ -20,10 +20,10 @@ from .sleep import (
     summarize_sleep_session,
 )
 from .strain import calculate_strain
-from .time_utils import date_key, local_minute_of_day, parse_instant, split_by_local_day
+from .time_utils import date_key, local_minute_of_day, parse_instant, split_by_local_day, zone_info
 
 
-ALGORITHM_VERSION = "health-analytics-v8.6"
+ALGORITHM_VERSION = "health-analytics-v8.7"
 HEALTHSPAN_MODEL_VERSION = "experimental-healthspan-v1"
 DAY_SECONDS = 86_400
 YEAR_DAYS = 365.2425
@@ -350,6 +350,63 @@ def aggregate_point_metric(observations, unit, value_key, policy, context):
     return build_metric_analytics(unit, daily)
 
 
+def aggregate_nightly_hrv(observations, sleep_events, context):
+    """One HRV value per night, filed under the wake date like sleep.
+
+    Watches export HRV as 5-minute RMSSD readings taken during sleep. Each
+    reading belongs to the night it falls in: local noon to noon, named by
+    the morning it ends on, so readings from before midnight no longer land
+    on the previous calendar day. The night's value is the mean of the
+    readings inside that night's main sleep (how Fitbit describes its nightly
+    HRV); a night with readings but no matching main sleep uses all of its
+    readings and is flagged `outside_main_sleep`.
+
+    Google Health's own nightly figure can't be reproduced exactly: on some
+    nights it exceeds every exported reading, so it isn't derived from them.
+    """
+    zone = zone_info(context.homeTimeZone)
+    main_windows = {}
+    for event in sleep_events:
+        primary = event.get("primary") or {}
+        if event.get("role") == "main" and primary.get("startAt") and primary.get("endAt"):
+            main_windows[event["date"]] = (parse_instant(primary["startAt"]), parse_instant(primary["endAt"]))
+
+    grouped = defaultdict(list)
+    for observation in observations:
+        observed_at = parse_instant(observation["observedAt"])
+        night = (observed_at.astimezone(zone) + dt.timedelta(hours=12)).date().isoformat()
+        grouped[(night, observation["source"])].append((observed_at, observation["milliseconds"]))
+
+    by_night = defaultdict(list)
+    for (night, source), readings in grouped.items():
+        window = main_windows.get(night)
+        in_sleep = [value for at, value in readings if window and window[0] <= at < window[1]]
+        used = in_sleep or [value for _, value in readings]
+        by_night[night].append({
+            "source": source,
+            "value": mean(used),
+            "observationCount": len(used),
+            "coverageMinutes": None,
+            "latestAt": max(at for at, _ in readings).timestamp(),
+            "flags": [] if in_sleep else ["outside_main_sleep"],
+        })
+    daily = []
+    for night, sources in by_night.items():
+        ranked = sorted(sources, key=lambda source: (-source["observationCount"], -source["latestAt"]))
+        selected = ranked[0]
+        daily.append({
+            "date": night,
+            "value": selected["value"],
+            "source": selected["source"],
+            "bySource": [
+                {key: value for key, value in source.items() if key not in ("latestAt", "flags")}
+                for source in ranked
+            ],
+            "qualityFlags": selected["flags"],
+        })
+    return build_metric_analytics("ms", daily)
+
+
 def compare_devices(events):
     observations = {}
     for event in events:
@@ -483,8 +540,8 @@ def process_health_data(raw, context=AnalyticsContext()):
     total_calories = aggregate_interval_metric(raw.get("totalCalories", []), "kcal", "energyKcal", context)
     resting_heart_rate = aggregate_point_metric(raw.get("restingHeartRates", []), "bpm", "bpm", "median", context)
     weight = aggregate_point_metric(raw.get("weights", []), "kg", "kilograms", "latest", context)
-    heart_rate_variability = aggregate_point_metric(
-        raw.get("heartRateVariabilities", []), "ms", "milliseconds", "median", context
+    heart_rate_variability = aggregate_nightly_hrv(
+        raw.get("heartRateVariabilities", []), sleep_events, context
     )
     skin_temperature = aggregate_point_metric(
         raw.get("skinTemperatures", []), "celsius_delta", "celsiusDelta", "median", context
