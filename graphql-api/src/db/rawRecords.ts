@@ -5,7 +5,7 @@ import { Db, Document, Filter } from "mongodb";
  * shapes that api/analytics_engine/repository.py's mapper functions produce
  * (_sleep, _steps, _energy, _resting_heart_rate, _weight,
  * _heart_rate_variability, _heart_rate, _respiratory_rate,
- * _oxygen_saturation, _exercise_session) - it is a straight reshape of the
+ * _oxygen_saturation, _exercise_session, _skin_temperature) - it is a straight reshape of the
  * on-disk document into the GraphQL type, not a reimplementation of any
  * analytics/normalization logic (no reconciliation, no stage-kind
  * inference beyond the same fixed lookup table Python uses, no bucketing).
@@ -304,6 +304,54 @@ export async function readExerciseSessions(
         startZoneOffset != null || endZoneOffset != null
           ? { start: startZoneOffset?.totalSeconds ?? null, end: endZoneOffset?.totalSeconds ?? null }
           : null,
+    };
+  });
+}
+
+export interface SkinTemperatureRecord {
+  id: string;
+  source: string;
+  startAt: Date;
+  endAt: Date;
+  baselineCelsius: number | null;
+  deltas: { observedAt: Date; celsius: number }[];
+  measurementLocation: number | null;
+}
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Skin temperature is a nightly interval record, so it overlaps-matches like
+ * sleep. A missing baseline stays null and a delta without a numeric
+ * inCelsius is dropped (never coerced to 0); sync() already rejects such
+ * deltas, so this only guards legacy or hand-written documents.
+ */
+export async function readSkinTemperature(
+  db: Db,
+  range: TimeRangeArg | undefined,
+): Promise<SkinTemperatureRecord[]> {
+  const docs = await findAll(db, "skinTemperature", rangeFilter(range, "overlaps"));
+  return docs.map((doc) => {
+    const d = data(doc);
+    const baseline = d.baseline as { inCelsius?: unknown } | null | undefined;
+    const deltas: { observedAt: Date; celsius: number }[] = [];
+    if (Array.isArray(d.deltas)) {
+      for (const entry of d.deltas as Array<Record<string, unknown>>) {
+        const celsius = finiteOrNull((entry?.delta as { inCelsius?: unknown } | undefined)?.inCelsius);
+        if (celsius === null || typeof entry.time !== "string") continue;
+        deltas.push({ observedAt: new Date(entry.time), celsius });
+      }
+    }
+    return {
+      id: String(doc.id ?? doc._id),
+      source: String(doc.app),
+      startAt: doc.startInstant ?? new Date(String(doc.start)),
+      endAt: doc.endInstant ?? new Date(String(doc.end)),
+      baselineCelsius: finiteOrNull(baseline?.inCelsius),
+      deltas,
+      measurementLocation: finiteOrNull(d.measurementLocation),
     };
   });
 }

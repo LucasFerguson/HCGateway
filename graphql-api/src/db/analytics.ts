@@ -78,6 +78,7 @@ export interface DailyDocument extends Document {
   totalCalories?: unknown;
   restingHeartRate?: unknown;
   heartRateVariability?: unknown;
+  skinTemperature?: unknown;
   weight?: unknown;
   strain?: unknown;
   strainWorkouts?: unknown;
@@ -99,6 +100,7 @@ export type DailySeriesField =
   | "totalCalories"
   | "restingHeartRate"
   | "heartRateVariability"
+  | "skinTemperature"
   | "weight"
   | "strain"
   | "recovery";
@@ -112,6 +114,7 @@ const DAILY_SERIES_FIELDS: DailySeriesField[] = [
   "totalCalories",
   "restingHeartRate",
   "heartRateVariability",
+  "skinTemperature",
   "weight",
   "strain",
   "recovery",

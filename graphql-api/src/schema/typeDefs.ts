@@ -151,6 +151,8 @@ export const typeDefs = /* GraphQL */ `
     oxygenSaturation(range: TimeRange): [OxygenSaturationRecord!]!
     weight(range: TimeRange): [WeightRecord!]!
     exerciseSessions(range: TimeRange): [ExerciseSession!]!
+    "Nightly skin-temperature records (Health Connect SkinTemperature), matched by overlap with range."
+    skinTemperature(range: TimeRange): [SkinTemperatureRecord!]!
   }
 
   type HeartRateData {
@@ -256,6 +258,29 @@ export const typeDefs = /* GraphQL */ `
     kilograms: Float!
   }
 
+  """
+  One Health Connect SkinTemperature record, read straight from the stored
+  record. Pixel Watch writes one per night: each delta is sleep-time skin
+  temperature relative to the wearer's baseline. baselineCelsius is null when
+  the writer supplied no baseline. No per-record summary is computed here;
+  the nightly value lives in analytics.skinTemperature.
+  """
+  type SkinTemperatureRecord {
+    id: ID!
+    source: String!
+    startAt: DateTime!
+    endAt: DateTime!
+    baselineCelsius: Float
+    deltas: [SkinTemperatureDelta!]!
+    "Health Connect SkinTemperatureRecord measurement-location constant (0 = unknown), or null if absent."
+    measurementLocation: Int
+  }
+
+  type SkinTemperatureDelta {
+    observedAt: DateTime!
+    celsius: Float!
+  }
+
   type ExerciseSession {
     id: ID!
     source: String!
@@ -294,6 +319,8 @@ export const typeDefs = /* GraphQL */ `
     totalCalories: MetricSeries!
     restingHeartRate: MetricSeries!
     heartRateVariability: MetricSeries!
+    "Nightly skin-temperature deviation from baseline (median of each night's mean delta), dated by wake time."
+    skinTemperature: MetricSeries!
     weight: MetricSeries!
 
     strain: StrainSummary!
@@ -677,7 +704,7 @@ export const typeDefs = /* GraphQL */ `
   }
 
   # ---------------------------------------------------------------------
-  # Metric series (steps, calories, RHR, HRV, weight)
+  # Metric series (steps, calories, RHR, HRV, skin temperature, weight)
   # ---------------------------------------------------------------------
 
   type MetricSeries {
@@ -694,6 +721,7 @@ export const typeDefs = /* GraphQL */ `
     BPM
     KG
     MS
+    CELSIUS_DELTA
   }
 
   type MetricDay {

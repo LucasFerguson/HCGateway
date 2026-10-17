@@ -89,6 +89,7 @@ const FIELD_COMPLEXITY: Record<string, number> = {
   "SourceRecords.oxygenSaturation": 80,
   "SourceRecords.weight": 40,
   "SourceRecords.exerciseSessions": 80,
+  "SourceRecords.skinTemperature": 80,
   "Analytics.days": 30,
   "Analytics.sleepEvents": 20,
   "Analytics.day": 5,

@@ -7,6 +7,7 @@ import {
   readOxygenSaturation,
   readRespiratoryRate,
   readRestingHeartRate,
+  readSkinTemperature,
   readSleepSessions,
   readSteps,
   readTotalCalories,
@@ -92,6 +93,8 @@ export const sourceRecordsResolvers = {
       context.withTimeout(readWeight(context.userDb, toRange(args.range)), "weight"),
     exerciseSessions: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) =>
       context.withTimeout(readExerciseSessions(context.userDb, toRange(args.range)), "exerciseSessions"),
+    skinTemperature: async (_parent: unknown, args: { range?: TimeRangeInput }, context: GraphQLContext) =>
+      context.withTimeout(readSkinTemperature(context.userDb, toRange(args.range)), "skinTemperature"),
   },
   HeartRateData: {
     records: async (

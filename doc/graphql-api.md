@@ -116,8 +116,24 @@ clients should keep their cache policy explicit for those types.
 Closed analytics values that drive presentation are GraphQL enums rather than
 free-form strings: healthspan status, healthspan factor key/unit, and metric
 unit. Their wire values use GraphQL's uppercase convention (`READY`,
-`RESTING_HEART_RATE`, `BPM`, `MS`, and so on), while the persisted Python
-analytics representation remains lowercase.
+`RESTING_HEART_RATE`, `BPM`, `MS`, `CELSIUS_DELTA`, and so on), while the
+persisted Python analytics representation remains lowercase.
+
+## Skin temperature
+
+- `analytics.skinTemperature: MetricSeries!` is the prepared nightly series
+  (unit `CELSIUS_DELTA`): for each wake date, the median of the selected
+  source's per-night mean delta from baseline. Computed in
+  `api/analytics_engine/pipeline.py`; GraphQL only reads it. Runs older than
+  `health-analytics-v8.6` have no stored series, so `daily` is empty until the
+  worker reprocesses.
+- `Day.supportingMetrics.skinTemperatureDeviation` carries the same per-day
+  value from the prepared day view, or `MISSING` with a null value.
+- `sourceRecords.skinTemperature(range:)` returns the raw `SkinTemperature`
+  records (overlap-matched like sleep): `id`, `source`, `startAt`, `endAt`,
+  `baselineCelsius` (null when the writer sent none), `deltas { observedAt
+  celsius }`, and `measurementLocation` (the Health Connect constant, or
+  null). No per-record summary is computed in Node.
 
 ## Safety model (all env-configurable, see `graphql-api/.env.example`)
 

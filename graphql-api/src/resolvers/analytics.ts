@@ -420,7 +420,7 @@ function synthesizeEmptyDay(date: string, homeTimeZone: string, processedAt: Dat
       restingHeartRate: missingMetric("bpm", "No resting-heart-rate measurement was recorded for this day."),
       respiratoryRate: missingMetric("breaths_per_minute", "No respiratory-rate measurement was recorded for this day."),
       oxygenSaturation: missingMetric("percent", "No oxygen-saturation measurement was recorded for this day."),
-      skinTemperatureDeviation: missingMetric("celsius_delta", "Skin temperature is not currently present in the database."),
+      skinTemperatureDeviation: missingMetric("celsius_delta", "No skin-temperature reading was recorded for this day."),
       steps: missingMetric("steps", "No steps were recorded for this day."),
       calories: missingMetric("kcal", "No calorie total was recorded for this day."),
       zone3AndAbove: missingMetric("minutes", "Heart-rate zones are not calibrated for this day."),
@@ -565,6 +565,7 @@ export const analyticsResolvers = {
     BPM: "bpm",
     KG: "kg",
     MS: "ms",
+    CELSIUS_DELTA: "celsius_delta",
   },
   Viewer: {
     analytics: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
@@ -661,6 +662,8 @@ export const analyticsResolvers = {
       metricSeriesRoot(context, "restingHeartRate"),
     heartRateVariability: async (_parent: unknown, _args: unknown, context: GraphQLContext) =>
       metricSeriesRoot(context, "heartRateVariability"),
+    skinTemperature: async (_parent: unknown, _args: unknown, context: GraphQLContext) =>
+      metricSeriesRoot(context, "skinTemperature"),
     weight: async (_parent: unknown, _args: unknown, context: GraphQLContext) => metricSeriesRoot(context, "weight"),
     strain: async (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       const runId = requireRunId(context);
@@ -993,6 +996,7 @@ async function metricSeriesRoot(context: GraphQLContext, key: DailySeriesField) 
     totalCalories: "kcal",
     restingHeartRate: "bpm",
     heartRateVariability: "ms",
+    skinTemperature: "celsius_delta",
     weight: "kg",
   };
   return {
