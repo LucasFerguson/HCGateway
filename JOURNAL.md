@@ -47,6 +47,46 @@ worker showed the time going to strain: every workout scanned all 6.3 million
 heart-rate segments. A binary search brought a real run down to 4 minutes 46
 seconds with identical output.
 
+**HRV now files by night (analytics v8.7), as an experiment.** After the
+new app version started collecting heart-rate variability, the dashboard's
+numbers ran lower than Google Health's. Google's HRV screen for Sep 18 to
+Oct 17 shows a 148 ms monthly average (personal range 70 to 215 ms) and
+weekly averages of 123, 121, 143, 171 and 159 ms. The screenshot covers the
+same dates as our data (Sep 18 to Oct 16), so the weekly averages make a
+fair comparison target.
+
+The readings themselves agree on scale: 1,550 five-minute RMSSD readings,
+median 131 ms, 80% between 74 and 185 ms, all taken between about 11 PM and
+7:30 AM (the watch only measures HRV asleep, and HRV differs by sleep
+stage). The old method took the median per calendar date, which split each
+night across two dates, while sleep is filed by wake date.
+
+Seven candidate methods were scored offline against Google's weekly
+averages (mean absolute error per week):
+
+| Method | Weekly error |
+| --- | --- |
+| Median per calendar date (old, v8.6) | 17.7 ms |
+| Median per wake date | 16.3 ms |
+| Mean per wake date | 15.7 ms |
+| **Mean inside the main sleep, per wake date (chosen)** | **15.1 ms** |
+| Median inside the main sleep | 16.7 ms |
+| Mean in deep sleep only | 13.9 ms (only 20 nights have stages) |
+| Mean in light + deep sleep | 14.7 ms (20 nights) |
+
+The chosen method matches how Fitbit describes its nightly HRV and keeps 26
+of 27 nights; the one night with no matching main sleep uses all its
+readings and is flagged. After deploying, the real v8.7 run scored 15.5 ms
+(month average 134 vs Google's 148).
+
+It can't match exactly, and that's now proven: on Sep 28 Google reports
+225 ms, but every one of the 11 readings exported for that night is below
+195 ms (Oct 4: 210 ms vs a 197 ms maximum). Google's nightly HRV is computed
+on Fitbit's side, probably from beat-to-beat data, not from the readings it
+writes to Health Connect. Our biggest gaps are on Google's peak nights.
+Possible next steps: try deep-sleep-only as an extra series, or show Google's
+own nightly value if it ever becomes available through an export.
+
 **WHOOP stopped writing to Health Connect on 2026-10-08.** Resting heart rate,
 SpO2 and respiratory rate only ever came from WHOOP, so all three have had no
 new data since then. Worth checking the WHOOP app's Health Connect permissions.
