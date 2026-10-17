@@ -173,6 +173,69 @@ class AnalyticsApiIntegrationTests(unittest.TestCase):
             0,
         )
 
+    def skin_temperature_record(self, record_id, deltas):
+        return {
+            "metadata": {"id": record_id, "dataOrigin": "test.watch"},
+            "startTime": "2026-10-16T05:00:00Z",
+            "endTime": "2026-10-16T12:30:00Z",
+            "baseline": {"inCelsius": 33.9, "inFahrenheit": 93.02},
+            "deltas": deltas,
+            "measurementLocation": 0,
+        }
+
+    def test_sync_stores_skin_temperature_with_the_standard_envelope(self):
+        from analytics_engine.repository import load_raw_health_data
+
+        response = self.client.post(
+            "/api/v2/sync/SkinTemperature",
+            headers=self.auth(),
+            json={"data": [self.skin_temperature_record("skin-ok", [
+                {"time": "2026-10-16T06:00:00Z", "delta": {"inCelsius": -0.3, "inFahrenheit": -0.54}},
+                {"time": "2026-10-16T07:00:00Z", "delta": {"inCelsius": 0.1, "inFahrenheit": 0.18}},
+            ])]},
+        )
+        self.assertEqual(response.status_code, 200)
+        user_db = self.mongo["hcgateway_" + self.user_id]
+        stored = user_db["skinTemperature"].find_one({"_id": "skin-ok"})
+        self.assertEqual(stored["app"], "test.watch")
+        self.assertEqual(stored["start"], "2026-10-16T05:00:00Z")
+        self.assertEqual(stored["end"], "2026-10-16T12:30:00Z")
+        self.assertEqual(stored["endInstant"], dt.datetime(2026, 10, 16, 12, 30))
+        self.assertEqual(stored["provenance"], {"dataOrigin": "test.watch"})
+        self.assertEqual(len(stored["data"]["deltas"]), 2)
+        self.assertIn("startInstant_1_app_1", user_db["skinTemperature"].index_information())
+
+        raw, issues = load_raw_health_data(user_db, cipher_for_user(self.user))
+        self.assertEqual(issues, [])
+        self.assertEqual(len(raw["skinTemperatures"]), 1)
+        self.assertAlmostEqual(raw["skinTemperatures"][0]["celsiusDelta"], -0.1)
+        self.assertEqual(raw["skinTemperatures"][0]["observedAt"], "2026-10-16T12:30:00.000Z")
+
+    def test_sync_rejects_invalid_skin_temperature_deltas_atomically(self):
+        valid = self.skin_temperature_record("skin-valid", [
+            {"time": "2026-10-16T06:00:00Z", "delta": {"inCelsius": -0.3}},
+        ])
+        cases = [
+            ([{"time": "2026-10-16T06:00:00", "delta": {"inCelsius": -0.3}}], "explicit offset"),
+            ([{"delta": {"inCelsius": -0.3}}], None),
+            ([{"time": "2026-10-16T06:00:00Z", "delta": {"inFahrenheit": -0.54}}], "numeric delta.inCelsius"),
+            ([{"time": "2026-10-16T06:00:00Z", "delta": {"inCelsius": "cold"}}], "numeric delta.inCelsius"),
+            ([{"time": "2026-10-16T06:00:00Z"}], "numeric delta.inCelsius"),
+        ]
+        for deltas, message in cases:
+            with self.subTest(deltas=deltas):
+                response = self.client.post(
+                    "/api/v2/sync/SkinTemperature",
+                    headers=self.auth(),
+                    json={"data": [valid, self.skin_temperature_record("skin-bad", deltas)]},
+                )
+                self.assertEqual(response.status_code, 400)
+                if message:
+                    self.assertIn(message, response.get_json()["error"])
+                self.assertEqual(
+                    self.mongo["hcgateway_" + self.user_id]["skinTemperature"].count_documents({}), 0
+                )
+
     def test_device_inventory_preserves_provenance_and_flags_ambiguous_sources(self):
         records = [
             {

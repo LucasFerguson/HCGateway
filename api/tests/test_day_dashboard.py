@@ -85,6 +85,29 @@ class DayDashboardTests(unittest.TestCase):
         day = empty_day("2026-01-01", AnalyticsContext(), analytics["processedAt"])
         self.assertEqual(day["supportingMetrics"]["oxygenSaturation"]["status"], "missing")
 
+    def test_skin_temperature_deviation_comes_from_the_daily_series(self):
+        raw = empty_raw_health_data()
+        raw["skinTemperatures"] = [{
+            "id": "skin", "source": "watch", "observedAt": "2026-01-02T13:00:00Z",
+            "celsiusDelta": -0.25, "baselineCelsius": 33.9, "measurementLocation": 0,
+        }]
+        raw["steps"] = [{
+            "id": "steps", "source": "watch", "startAt": "2026-01-03T12:00:00Z",
+            "endAt": "2026-01-03T13:00:00Z", "count": 100,
+        }]
+        analytics = process_health_data(raw)
+        days = {item["date"]: item for item in analytics["dayViews"]}
+        metric = days["2026-01-02"]["supportingMetrics"]["skinTemperatureDeviation"]
+        self.assertEqual(metric["status"], "available")
+        self.assertEqual(metric["value"], -0.25)
+        self.assertEqual(metric["unit"], "celsius_delta")
+        self.assertEqual(metric["source"], "watch")
+        missing = days["2026-01-03"]["supportingMetrics"]["skinTemperatureDeviation"]
+        self.assertEqual(missing["status"], "missing")
+        self.assertIsNone(missing["value"])
+        self.assertEqual(missing["unit"], "celsius_delta")
+        self.assertEqual(missing["note"], "No skin-temperature reading was recorded for this day.")
+
 
 if __name__ == "__main__":
     unittest.main()

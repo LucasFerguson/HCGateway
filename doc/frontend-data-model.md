@@ -2,7 +2,7 @@
 
 HCGateway keeps encrypted Health Connect records as its source of truth. A
 separate Python worker decrypts the supported analytics signals, normalizes
-them, runs `health-analytics-v8.5`, and writes encrypted, immutable
+them, runs `health-analytics-v8.6`, and writes encrypted, immutable
 prepared runs back to each user's MongoDB database.
 
 The implementation is a behavioral port of the dashboard repository's
@@ -47,8 +47,20 @@ The day contract includes:
 - provisional Recovery readiness and experimental cardiovascular strain with quality metadata;
 - hourly heart-rate min/p25/mean/p75/max candlesticks;
 - hourly steps, workouts, daily supporting metrics, and latest observation;
+- nightly skin-temperature deviation (`supportingMetrics.skinTemperatureDeviation`,
+  unit `celsius_delta`) when a SkinTemperature record ends on that date;
 - explicit placeholders for strain target, schedule blocks, missing HRV,
-  skin-temperature deviation, and bed/wake preferences.
+  missing skin temperature, and bed/wake preferences.
+
+Skin temperature comes from Health Connect `SkinTemperature` records (Pixel
+Watch writes one per night). Each record's `deltas` are sleep-time skin
+temperature relative to the wearer's baseline. The analytics mapper reduces a
+record to the mean of its deltas' `inCelsius` and dates it by the record end
+(wake time), like sleep; the daily `skinTemperature` series takes the median
+of those per-record values for the selected source. A record with no deltas
+is reported as an analytics issue rather than becoming 0, and days without a
+record stay missing. It is a deviation from baseline, not an absolute body
+temperature.
 
 Recovery v1.1 is a provisional, non-clinical heuristic. It combines sleep duration
 (30%), HRV change from a trailing 28-day personal median (35%), resting-heart-rate
@@ -77,7 +89,7 @@ dashboard contract unchanged:
   "source": "health-connect",
   "sleepSessions": [],
   "analytics": {
-    "algorithmVersion": "health-analytics-v8.5",
+    "algorithmVersion": "health-analytics-v8.6",
     "timeZone": "America/Chicago",
     "sourceFingerprint": "...",
     "configurationFingerprint": "...",
@@ -94,6 +106,7 @@ dashboard contract unchanged:
     "restingHeartRate": {},
     "weight": {},
     "heartRateVariability": {},
+    "skinTemperature": {},
     "strain": {},
     "recovery": {}
   }
@@ -117,7 +130,7 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
 
 ```json
 {
-  "runId": "health-analytics-v8.5:<source>:<configuration>",
+  "runId": "health-analytics-v8.6:<source>:<configuration>",
   "count": 1,
   "days": [
     {
@@ -131,6 +144,7 @@ parameters are inclusive `start` and `end` dates (`YYYY-MM-DD`) and `limit`
       "totalCalories": null,
       "restingHeartRate": null,
       "heartRateVariability": null,
+      "skinTemperature": null,
       "weight": null,
       "strain": null,
       "recovery": null,

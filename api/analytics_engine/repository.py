@@ -92,6 +92,33 @@ def _heart_rate_variability(document, data):
     return {"id": record_id, "source": source, "observedAt": start, "milliseconds": milliseconds}
 
 
+def _skin_temperature(document, data):
+    # Nightly Pixel Watch records: deltas are sleep-time skin temperature
+    # relative to the wearer's baseline. The value lands on the record END
+    # (wake time), matching how sleep is dated.
+    record_id, source, _, end = _envelope(document, require_end=True)
+    deltas = data.get("deltas")
+    if not isinstance(deltas, list) or not deltas:
+        raise ValueError("skin temperature record has no deltas")
+    celsius = []
+    for delta in deltas:
+        if not isinstance(delta, dict):
+            raise ValueError("skin temperature delta must be an object")
+        utc_iso(delta.get("time"))
+        celsius.append(_number((delta.get("delta") or {}).get("inCelsius"), "skin temperature delta"))
+    baseline_celsius = (data.get("baseline") or {}).get("inCelsius")
+    if baseline_celsius is not None:
+        baseline_celsius = _number(baseline_celsius, "skin temperature baseline", strictly_positive=True)
+    return {
+        "id": record_id,
+        "source": source,
+        "observedAt": end,
+        "celsiusDelta": sum(celsius) / len(celsius),
+        "baselineCelsius": baseline_celsius,
+        "measurementLocation": data.get("measurementLocation"),
+    }
+
+
 def _heart_rate(document, data):
     record_id, source, start, end = _envelope(document, require_end=True)
     samples = []
@@ -148,6 +175,7 @@ MAPPERS = {
     "respiratoryRate": ("respiratoryRates", _respiratory_rate),
     "oxygenSaturation": ("oxygenSaturations", _oxygen_saturation),
     "exerciseSession": ("exerciseSessions", _exercise_session),
+    "skinTemperature": ("skinTemperatures", _skin_temperature),
 }
 
 
@@ -166,6 +194,7 @@ def empty_raw_health_data():
             "respiratoryRates",
             "oxygenSaturations",
             "exerciseSessions",
+            "skinTemperatures",
         )
     }
 

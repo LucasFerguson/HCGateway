@@ -228,8 +228,8 @@ class HealthspanAndPipelineTests(unittest.TestCase):
         self.assertEqual(set(first), {
             "algorithmVersion", "timeZone", "sourceFingerprint", "configurationFingerprint", "processedAt", "sleepEvents",
             "dailySleep", "sleepDebt", "sleepConsistency", "healthspan", "deviceSleep", "steps",
-            "activeCalories", "totalCalories", "restingHeartRate", "heartRateVariability", "weight",
-            "strain", "recovery", "dayViews"
+            "activeCalories", "totalCalories", "restingHeartRate", "heartRateVariability", "skinTemperature",
+            "weight", "strain", "recovery", "dayViews"
         })
 
     def test_hrv_changes_are_part_of_the_source_fingerprint(self):
@@ -239,6 +239,39 @@ class HealthspanAndPipelineTests(unittest.TestCase):
             "id": "hrv", "source": "watch", "observedAt": "2026-01-01T12:00:00Z", "milliseconds": 42,
         }]
         self.assertNotEqual(first, source_fingerprint(raw))
+
+    def test_skin_temperature_changes_are_part_of_the_source_fingerprint(self):
+        raw = empty_raw_health_data()
+        first = source_fingerprint(raw)
+        raw["skinTemperatures"] = [{
+            "id": "skin", "source": "watch", "observedAt": "2026-01-02T13:00:00Z",
+            "celsiusDelta": -0.2, "baselineCelsius": 33.9, "measurementLocation": 0,
+        }]
+        self.assertNotEqual(first, source_fingerprint(raw))
+
+    def test_skin_temperature_daily_series_uses_wake_date_and_median(self):
+        raw = empty_raw_health_data()
+        raw["skinTemperatures"] = [
+            {"id": "a", "source": "watch", "observedAt": "2026-10-16T12:30:00Z",
+             "celsiusDelta": -0.3, "baselineCelsius": 33.9, "measurementLocation": 0},
+            {"id": "b", "source": "watch", "observedAt": "2026-10-16T13:30:00Z",
+             "celsiusDelta": 0.1, "baselineCelsius": 33.9, "measurementLocation": 0},
+            {"id": "c", "source": "watch", "observedAt": "2026-10-16T14:30:00Z",
+             "celsiusDelta": 0.5, "baselineCelsius": None, "measurementLocation": 0},
+        ]
+        analytics = process_health_data(raw, AnalyticsContext(homeTimeZone="America/Chicago"))
+        series = analytics["skinTemperature"]
+        self.assertEqual(series["unit"], "celsius_delta")
+        self.assertEqual(len(series["daily"]), 1)
+        self.assertEqual(series["daily"][0]["date"], "2026-10-16")
+        self.assertAlmostEqual(series["daily"][0]["value"], 0.1)
+        self.assertEqual(series["daily"][0]["bySource"][0]["observationCount"], 3)
+
+    def test_skin_temperature_absence_stays_empty_not_zero(self):
+        analytics = process_health_data(empty_raw_health_data())
+        self.assertEqual(analytics["skinTemperature"]["daily"], [])
+        self.assertIsNone(analytics["skinTemperature"]["overview"]["latest"])
+        self.assertIsNone(analytics["skinTemperature"]["overview"]["average7Day"])
 
 
 if __name__ == "__main__":

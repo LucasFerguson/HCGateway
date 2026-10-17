@@ -15,6 +15,7 @@ def _empty_analytics(time_zone="America/Chicago", workouts=None):
         "totalCalories": {"daily": []},
         "restingHeartRate": {"daily": []},
         "heartRateVariability": {"daily": []},
+        "skinTemperature": {"daily": []},
         "weight": {"daily": []},
         "strain": {"daily": [], "workouts": workouts or []},
         "recovery": {"daily": []},

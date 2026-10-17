@@ -121,7 +121,10 @@ def _daily_point(records, date, zone, value_key, unit, label):
 
 def _observed_dates(raw, analytics, zone):
     dates = {item["date"] for item in analytics.get("dailySleep", [])}
-    for key in ("steps", "activeCalories", "totalCalories", "restingHeartRate", "heartRateVariability", "weight"):
+    for key in (
+        "steps", "activeCalories", "totalCalories", "restingHeartRate",
+        "heartRateVariability", "skinTemperature", "weight",
+    ):
         dates.update(item["date"] for item in analytics.get(key, {}).get("daily", []))
     for record in raw.get("heartRates", []):
         dates.update(_date(sample["observedAt"], zone) for sample in record.get("samples", []))
@@ -154,7 +157,7 @@ def empty_day(date, context, processed_at=None):
             "restingHeartRate": _metric("missing", unit="bpm", note="No resting-heart-rate measurement was recorded for this day."),
             "respiratoryRate": _metric("missing", unit="breaths_per_minute", note="No respiratory-rate measurement was recorded for this day."),
             "oxygenSaturation": _metric("missing", unit="percent", note="No oxygen-saturation measurement was recorded for this day."),
-            "skinTemperatureDeviation": _metric("missing", unit="celsius_delta", note="Skin temperature is not currently present in the database."),
+            "skinTemperatureDeviation": _metric("missing", unit="celsius_delta", note="No skin-temperature reading was recorded for this day."),
             "steps": _metric("missing", unit="steps", note="No steps were recorded for this day."),
             "calories": _metric("missing", unit="kcal", note="No calorie total was recorded for this day."),
             "zone3AndAbove": _metric("missing", unit="minutes", note="Heart-rate zones are not calibrated for this day."),
@@ -205,6 +208,7 @@ def build_day_views(raw, analytics, context):
     calories = _lookup(analytics.get("totalCalories", {}).get("daily", []))
     resting = _lookup(analytics.get("restingHeartRate", {}).get("daily", []))
     hrv = _lookup(analytics.get("heartRateVariability", {}).get("daily", []))
+    skin = _lookup(analytics.get("skinTemperature", {}).get("daily", []))
     strain = _lookup(analytics.get("strain", {}).get("daily", []))
     recovery = _lookup(analytics.get("recovery", {}).get("daily", []))
     workout_strain = {item.get("id"): item for item in analytics.get("strain", {}).get("workouts", [])}
@@ -265,6 +269,12 @@ def build_day_views(raw, analytics, context):
             view["supportingMetrics"]["hrv"] = _metric(
                 "available", hrv_day["value"], "ms", source=hrv_day["source"],
                 quality_flags=hrv_day.get("qualityFlags"), metric="RMSSD",
+            )
+        skin_day = skin.get(date)
+        if skin_day:
+            view["supportingMetrics"]["skinTemperatureDeviation"] = _metric(
+                "available", round(skin_day["value"], 2), "celsius_delta", source=skin_day["source"],
+                quality_flags=skin_day.get("qualityFlags"),
             )
         view["supportingMetrics"]["respiratoryRate"] = _daily_point(raw.get("respiratoryRates", []), date, zone, "breathsPerMinute", "breaths_per_minute", "respiratory-rate")
         view["supportingMetrics"]["oxygenSaturation"] = _daily_point(raw.get("oxygenSaturations", []), date, zone, "percentage", "percent", "oxygen-saturation")

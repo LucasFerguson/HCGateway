@@ -1,4 +1,4 @@
-"""Health analytics v8.5: prepared health views plus provisional Recovery and Strain."""
+"""Health analytics v8.6: prepared health views plus provisional Recovery and Strain."""
 
 import datetime as dt
 import hashlib
@@ -23,7 +23,7 @@ from .strain import calculate_strain
 from .time_utils import date_key, local_minute_of_day, parse_instant, split_by_local_day
 
 
-ALGORITHM_VERSION = "health-analytics-v8.5"
+ALGORITHM_VERSION = "health-analytics-v8.6"
 HEALTHSPAN_MODEL_VERSION = "experimental-healthspan-v1"
 DAY_SECONDS = 86_400
 YEAR_DAYS = 365.2425
@@ -92,6 +92,7 @@ def source_fingerprint(raw):
             "respiratoryRates",
             "oxygenSaturations",
             "exerciseSessions",
+            "skinTemperatures",
         )
     }
     return fingerprint(ordered)
@@ -485,6 +486,9 @@ def process_health_data(raw, context=AnalyticsContext()):
     heart_rate_variability = aggregate_point_metric(
         raw.get("heartRateVariabilities", []), "ms", "milliseconds", "median", context
     )
+    skin_temperature = aggregate_point_metric(
+        raw.get("skinTemperatures", []), "celsius_delta", "celsiusDelta", "median", context
+    )
     heart_rate_records = raw.get("heartRates", [])
     samples_by_source = defaultdict(list)
     for record in heart_rate_records:
@@ -529,6 +533,7 @@ def process_health_data(raw, context=AnalyticsContext()):
         "restingHeartRate": resting_heart_rate,
         "weight": weight,
         "heartRateVariability": heart_rate_variability,
+        "skinTemperature": skin_temperature,
         "strain": strain,
         "recovery": recovery,
     }

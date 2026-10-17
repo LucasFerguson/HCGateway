@@ -87,7 +87,7 @@ paths:
           boneMass, cervicalMucus, distance, exerciseSession, elevationGained, floorsClimbed,
           heartRate, heartRateVariabilityRmssd, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
           nutrition, ovulationTest, oxygenSaturation, power, respiratoryRate, restingHeartRate,
-          sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
+          skinTemperature, sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
           wheelchairPushes'
       requestBody:
         content:
@@ -106,7 +106,7 @@ paths:
   "/api/v2/sync/{method}":
     post:
       operationId: syncHealthConnectData
-      description: Store one or more Health Connect records in the authenticated user's encrypted source-of-truth collection and queue analytics preparation. Timestamped fields must be absolute ISO 8601 instants with UTC Z or an explicit offset. The complete batch is validated before any record is written.
+      description: Store one or more Health Connect records in the authenticated user's encrypted source-of-truth collection and queue analytics preparation. Timestamped fields must be absolute ISO 8601 instants with UTC Z or an explicit offset. SkinTemperature records must give every deltas[] entry a valid time and a numeric delta.inCelsius. The complete batch is validated before any record is written.
       security:
       - bearerAuth: []
       parameters:
@@ -151,7 +151,7 @@ paths:
           boneMass, cervicalMucus, distance, exerciseSession, elevationGained, floorsClimbed,
           heartRate, heartRateVariabilityRmssd, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
           nutrition, ovulationTest, oxygenSaturation, power, respiratoryRate, restingHeartRate,
-          sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
+          skinTemperature, sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
           wheelchairPushes'
       requestBody:
         content:
@@ -185,7 +185,7 @@ paths:
           boneMass, cervicalMucus, distance, exerciseSession, elevationGained, floorsClimbed,
           heartRate, heartRateVariabilityRmssd, height, hydration, leanBodyMass, menstruationFlow, menstruationPeriod,
           nutrition, ovulationTest, oxygenSaturation, power, respiratoryRate, restingHeartRate,
-          sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
+          skinTemperature, sleepSession, speed, steps, stepsCadence, totalCaloriesBurned, vo2Max, weight,
           wheelchairPushes'
       requestBody:
         content:

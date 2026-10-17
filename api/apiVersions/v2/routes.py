@@ -197,6 +197,11 @@ def sync(method):
                     raise ValueError(f'record {index} contains a stage whose endTime precedes startTime')
             for sample in item.get('samples', []):
                 parse_instant(sample.get('time'))
+            for delta in item.get('deltas') or []:
+                parse_instant(delta.get('time'))
+                celsius = (delta.get('delta') or {}).get('inCelsius')
+                if isinstance(celsius, bool) or not isinstance(celsius, (int, float)):
+                    raise ValueError(f'record {index} contains a delta without numeric delta.inCelsius')
     except (AttributeError, TypeError, ValueError) as error:
         return jsonify({'error': str(error)}), 400
     db = mongo['hcgateway_'+userid]

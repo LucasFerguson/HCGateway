@@ -66,6 +66,7 @@ def _daily_documents(analytics):
         "totalCalories": analytics["totalCalories"]["daily"],
         "restingHeartRate": analytics["restingHeartRate"]["daily"],
         "heartRateVariability": analytics["heartRateVariability"]["daily"],
+        "skinTemperature": analytics["skinTemperature"]["daily"],
         "weight": analytics["weight"]["daily"],
         "strain": analytics["strain"]["daily"],
         "recovery": analytics["recovery"]["daily"],
@@ -168,7 +169,10 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
             "healthspan": _without(analytics["healthspan"], "trend"),
             "metricOverviews": {
                 name: {key: value for key, value in analytics[name].items() if key != "daily"}
-                for name in ("steps", "activeCalories", "totalCalories", "restingHeartRate", "heartRateVariability", "weight")
+                for name in (
+                    "steps", "activeCalories", "totalCalories", "restingHeartRate",
+                    "heartRateVariability", "skinTemperature", "weight",
+                )
             },
             "strain": _without(_without(analytics["strain"], "daily"), "workouts"),
             "recovery": _without(analytics["recovery"], "daily"),
@@ -196,6 +200,7 @@ def save_analytics(database, cipher, raw, analytics, issues=None):
             "dailyTotalCalories": len(analytics["totalCalories"]["daily"]),
             "dailyRestingHeartRate": len(analytics["restingHeartRate"]["daily"]),
             "dailyHeartRateVariability": len(analytics["heartRateVariability"]["daily"]),
+            "dailySkinTemperature": len(analytics["skinTemperature"]["daily"]),
             "weightMeasurements": len(analytics["weight"]["daily"]),
             "dailyStrain": len(analytics["strain"]["daily"]),
             "dailyRecovery": len(analytics["recovery"]["daily"]),
