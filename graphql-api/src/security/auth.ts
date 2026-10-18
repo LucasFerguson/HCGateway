@@ -10,6 +10,11 @@ import { CONTROL_DB_NAME } from "../db/mongo.js";
  *   1. a per-device session whose `tokenHash` is sha256(token), or
  *   2. a legacy single token on the user document that hasn't expired.
  *
+ * On top of that, and unlike the Flask hook, this also accepts read-only API
+ * keys (api/api_keys.py): an `api_keys` document whose `keyHash` is
+ * sha256(key). Flask deliberately doesn't, so a key reaches only this API,
+ * which has no mutations; that is what makes keys read-only.
+ *
  * This is the one deliberately duplicated piece of Python logic (per
  * doc/graphql-schema-design.md) - a small collection lookup, kept
  * intentionally in sync with the Python rather than shared as a library.
@@ -23,7 +28,16 @@ import { CONTROL_DB_NAME } from "../db/mongo.js";
 export interface AuthenticatedUser {
   /** The MongoDB `_id` string of the authenticated user - never logged. */
   userId: string;
+  /**
+   * How the request signed in. An API key is read-only: the schema has no
+   * mutations today, and anything added that writes must refuse `apiKey`.
+   */
+  credential: "session" | "apiKey";
 }
+
+/** How often a key's `lastUsedAt` is rewritten; finer than this isn't
+ * useful to its owner and would turn every read into a write. */
+const LAST_USED_RESOLUTION_MS = 60_000;
 
 export class AuthError extends GraphQLError {
   constructor(message: string) {
@@ -61,7 +75,24 @@ export async function authenticate(
     .collection("sessions")
     .findOne<{ userId: string }>({ tokenHash }, { projection: { userId: 1 } });
   if (session) {
-    return { userId: String(session.userId) };
+    return { userId: String(session.userId), credential: "session" };
+  }
+
+  const apiKey = await db
+    .collection("api_keys")
+    .findOne<{ _id: string; userId: string; lastUsedAt?: Date | null }>(
+      { keyHash: tokenHash },
+      { projection: { userId: 1, lastUsedAt: 1 } },
+    );
+  if (apiKey) {
+    const lastUsed = apiKey.lastUsedAt ? new Date(apiKey.lastUsedAt).getTime() : 0;
+    if (Date.now() - lastUsed > LAST_USED_RESOLUTION_MS) {
+      // Best effort and not awaited: a failed timestamp must not fail the read.
+      db.collection<{ _id: string }>("api_keys")
+        .updateOne({ _id: apiKey._id }, { $set: { lastUsedAt: new Date() } })
+        .catch(() => undefined);
+    }
+    return { userId: String(apiKey.userId), credential: "apiKey" };
   }
 
   const user = await db.collection("users").findOne<{ _id: string; expiry?: Date }>({ token });
@@ -74,5 +105,5 @@ export async function authenticate(
     throw new AuthError("token expired. Use /api/v2/login to reauthenticate.");
   }
 
-  return { userId: String(user._id) };
+  return { userId: String(user._id), credential: "session" };
 }

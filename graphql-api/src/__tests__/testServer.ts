@@ -6,7 +6,7 @@ import { typeDefs } from "../schema/typeDefs.js";
 import { resolvers } from "../resolvers/index.js";
 import { buildContext, GraphQLContext } from "../context.js";
 import { AppConfig } from "../config.js";
-import { depthLimitRule, aliasLimitRule, complexityPlugin } from "../security/validationRules.js";
+import { depthLimitRule, aliasLimitRule, complexityPlugin, readOnlyRule } from "../security/validationRules.js";
 import { CONTROL_DB_NAME } from "../db/mongo.js";
 
 /**
@@ -57,6 +57,7 @@ export async function createTestHarness(configOverrides: Partial<AppConfig> = {}
   const server = new ApolloServer<GraphQLContext>({
     schema,
     validationRules: [
+      readOnlyRule,
       depthLimitRule(config.maxQueryDepth),
       aliasLimitRule(config.maxAliasCount),
     ],

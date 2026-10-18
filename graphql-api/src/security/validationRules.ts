@@ -36,6 +36,26 @@ export function depthLimitRule(maxDepth: number): ValidationRule {
 }
 
 /** Reject an operation with more than `maxAliases` field aliases anywhere in it. */
+/**
+ * This API only reads. The schema has no Mutation or Subscription type, and
+ * without this rule such an operation got past validation and crashed the
+ * complexity plugin with a 500. It's also the guarantee read-only API keys
+ * rest on, so say it plainly and early.
+ */
+export function readOnlyRule(context: ValidationContext): ASTVisitor {
+  return {
+    OperationDefinition(node) {
+      if (node.operation !== "query") {
+        context.reportError(
+          new GraphQLError(`This API is read-only; ${node.operation}s are not supported.`, {
+            nodes: [node],
+          }),
+        );
+      }
+    },
+  };
+}
+
 export function aliasLimitRule(maxAliases: number): ValidationRule {
   return function AliasLimit(context: ValidationContext): ASTVisitor {
     let count = 0;

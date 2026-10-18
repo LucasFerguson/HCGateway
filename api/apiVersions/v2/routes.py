@@ -19,6 +19,7 @@ from account_requests import file_request, pending_request
 from credentials import (PASSWORD_MAX, PASSWORD_MIN, REFRESH_MAX, USERNAME_RULE,
                          client_label, normalize_username, valid_password)
 import login_throttle
+from api_keys import MAX_KEYS_PER_USER, NAME_RULE, create_key, list_keys, normalize_name, revoke_key
 
 from analytics_engine.context import AnalyticsContext, context_for_user, validate_context
 from analytics_engine.crypto import PLAIN_STORAGE_FORMAT, cipher_for_user, decode_stored_json
@@ -185,6 +186,30 @@ def change_password():
     # Other sessions (the phone, other browsers) stay signed in: a session is
     # independent of the password once it exists.
     usrStore.update_one({'_id': g.user}, {'$set': {'password': ph.hash(new)}})
+    return jsonify({'success': True}), 200
+
+# API keys. These routes sit behind before_request like the rest, which only
+# accepts sessions, so a key can never be used to make or revoke keys.
+@v2.get("/api-keys")
+def get_api_keys():
+    return jsonify({'keys': list_keys(mongo['hcgateway'], g.user)}), 200
+
+@v2.post("/api-keys")
+def post_api_key():
+    body = request.get_json(silent=True)
+    name = normalize_name(body.get('name')) if isinstance(body, dict) else None
+    if not name:
+        return jsonify({'error': NAME_RULE}), 400
+    created = create_key(mongo['hcgateway'], g.user, name)
+    if not created:
+        return jsonify({'error': f'you already have {MAX_KEYS_PER_USER} keys; revoke one first'}), 409
+    public, key = created
+    return jsonify({**public, 'key': key}), 201
+
+@v2.delete("/api-keys/<key_id>")
+def delete_api_key(key_id):
+    if not revoke_key(mongo['hcgateway'], g.user, key_id):
+        return jsonify({'error': 'no such key'}), 404
     return jsonify({'success': True}), 200
 
 @v2.post("/sync/<method>")

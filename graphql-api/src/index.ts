@@ -16,7 +16,7 @@ import { resolvers } from "./resolvers/index.js";
 import { connectMongo, closeMongo } from "./db/mongo.js";
 import { buildContext, GraphQLContext } from "./context.js";
 import { AuthError } from "./security/auth.js";
-import { depthLimitRule, aliasLimitRule, complexityPlugin } from "./security/validationRules.js";
+import { depthLimitRule, aliasLimitRule, complexityPlugin, readOnlyRule } from "./security/validationRules.js";
 import { responseSizeCapPlugin } from "./security/responseSizeCap.js";
 import { requestLoggingPlugin, logAuthFailure } from "./logging.js";
 
@@ -79,6 +79,7 @@ async function main() {
     introspection: true, // needed for tooling/codegen per the design doc; playground is gated separately below.
     includeStacktraceInErrorResponses: config.nodeEnv !== "production",
     validationRules: [
+      readOnlyRule,
       depthLimitRule(config.maxQueryDepth),
       aliasLimitRule(config.maxAliasCount),
     ],

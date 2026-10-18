@@ -25,6 +25,10 @@ MongoDB and does not route through the Flask API.
 - Every field is scoped to the authenticated user's own `hcgateway_<userId>`
   database, derived once from the token. No field accepts a user ID or
   database name as an argument.
+- Read-only API keys (`hcg_...`) are accepted too, looked up by sha256 in
+  `hcgateway.api_keys` (see `api/api_keys.py`). Flask never accepts them, so
+  a key reaches only this API, which has no mutations. The context records
+  `credential: "apiKey"`; anything that ever writes must refuse it.
 
 ## Root shape
 
@@ -134,6 +138,24 @@ persisted Python analytics representation remains lowercase.
   `baselineCelsius` (null when the writer sent none), `deltas { observedAt
   celsius }`, and `measurementLocation` (the Health Connect constant, or
   null). No per-record summary is computed in Node.
+
+## API keys
+
+People make keys in the dashboard's Settings (or `POST /api/v2/api-keys`
+with a session) and use them from scripts. From outside the LAN the only
+route in is the dashboard's same-origin proxy, which forwards a well-formed
+`hcg_` key in place of the session cookie:
+
+```bash
+curl https://health.lucaslad.dev/api/graphql \
+  -H "Authorization: Bearer $HCG_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ viewer { sourceRecords { steps(range: {start: \"2026-10-01T00:00:00Z\", endExclusive: \"2026-10-08T00:00:00Z\"}) { startAt count } } } }"}'
+```
+
+Keys are shown once, stored as a hash, limited to 10 per account, and stop
+working the moment they're revoked. `lastUsedAt` is updated at most once a
+minute.
 
 ## Safety model (all env-configurable, see `graphql-api/.env.example`)
 

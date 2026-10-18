@@ -108,6 +108,66 @@ paths:
             application/json:
               schema:
                 "$ref": "#/components/schemas/silentObject"
+  "/api/v2/api-keys":
+    get:
+      tags:
+        - API keys
+      operationId: list_api_keys
+      description: The signed-in account's read-only API keys, newest first. Never includes the key itself.
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      "$ref": "#/components/schemas/apiKey"
+    post:
+      tags:
+        - API keys
+      operationId: create_api_key
+      description: >
+        Make a read-only API key for the GraphQL API. The response is the only
+        time the full key is shown. Needs a session token: API keys are never
+        accepted by this REST API, including these routes.
+      security:
+      - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              properties:
+                name: {type: string, description: '1-48 letters, digits, spaces, dots, dashes, underscores or parentheses.'}
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - "$ref": "#/components/schemas/apiKey"
+                  - properties:
+                      key: {type: string, description: 'The full key, hcg_ followed by 43 URL-safe characters.'}
+        '400': {description: Invalid name.}
+        '409': {description: The account already has 10 keys.}
+  "/api/v2/api-keys/{id}":
+    delete:
+      tags:
+        - API keys
+      operationId: revoke_api_key
+      description: Revoke one of the signed-in account's keys; it stops working immediately.
+      security:
+      - bearerAuth: []
+      parameters:
+      - {in: path, name: id, required: true, schema: {type: string}}
+      responses:
+        '200': {description: Revoked.}
+        '404': {description: No key with that id on this account.}
   "/api/v2/fetch/{method}":
     post:
       operationId: fetch
@@ -416,6 +476,13 @@ components:
       type: http
       scheme: bearer
   schemas:
+    apiKey:
+      properties:
+        id: {type: string}
+        name: {type: string}
+        prefix: {type: string, description: The first 10 characters, to tell keys apart.}
+        createdAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time, nullable: true}
     dataObject:
       properties:
         _id:
