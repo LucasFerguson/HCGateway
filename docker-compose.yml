@@ -92,6 +92,14 @@ services:
     volumes:
       - ./db:/data/db
     container_name: hcgateway_db
+    # Docker's default soft limit of 1024 open files is too low: WiredTiger
+    # keeps a file per collection and index (400+ already), and on 2026-10-17
+    # mongod aborted six times with "Too many open files" (WT error 24) while
+    # tests created extra databases. MongoDB recommends 64000.
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?Set MONGO_INITDB_ROOT_PASSWORD in the root .env file}
