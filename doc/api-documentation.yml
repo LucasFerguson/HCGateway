@@ -17,7 +17,11 @@ paths:
       tags:
         - Authentication
       operationId: get_token
-      description: Login a user and get a token to use for authentiction.
+      description: >
+        Login a user and get a token to use for authentication. An unknown
+        username and a wrong password get the same 403 answer. After 10 failed
+        attempts for one username within 15 minutes, that username gets 429
+        until the oldest failure is 15 minutes old, even with the right password.
       parameters: []
       requestBody:
         content:
@@ -25,12 +29,46 @@ paths:
             schema:
               "$ref": "#/components/schemas/loginParameters"
       responses:
-        '200':
-          description: ''
+        '201':
+          description: Signed in; a new session for this device.
           content:
             application/json:
               schema:
                 "$ref": "#/components/schemas/loginObject"
+        '400': {description: username or password missing or not a string.}
+        '403':
+          description: >
+            Wrong username or password. If the username has a waiting account
+            request and the password matches it, the body also carries
+            `pending: true`.
+        '429': {description: Too many failed attempts for this username.}
+  "/api/v2/signup":
+    post:
+      tags:
+        - Authentication
+      operationId: request_account
+      description: >
+        Request an account. This does not create one: the request waits until
+        an admin approves it with `manage_accounts.py`. Every well-formed
+        request gets the same 202, whether it was queued or not (username
+        taken, already requested, or queue full), so this can't be used to
+        find usernames.
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/loginParameters"
+      responses:
+        '202':
+          description: Request received.
+          content:
+            application/json:
+              schema:
+                properties:
+                  pending: {type: boolean, enum: [true]}
+                  message: {type: string}
+        '400': {description: Username not 1-64 characters, or password under 8 characters.}
   "/api/v2/refresh":
     post:
       tags:

@@ -15,6 +15,10 @@ ph = PasswordHasher()
 import secrets, datetime
 
 from auth_sessions import create_session, refresh_session, revoke_session, user_id_for_token
+from account_requests import file_request, pending_request
+from credentials import (PASSWORD_MAX, PASSWORD_MIN, REFRESH_MAX, USERNAME_RULE,
+                         client_label, normalize_username, valid_password)
+import login_throttle
 
 from analytics_engine.context import AnalyticsContext, context_for_user, validate_context
 from analytics_engine.crypto import PLAIN_STORAGE_FORMAT, cipher_for_user, decode_stored_json
@@ -51,66 +55,93 @@ def before_request():
 
     return
 
+# Verified against when a username has no account, so an unknown username
+# costs the same Argon2 check as a wrong password and timing can't tell them apart.
+_DUMMY_HASH = ph.hash(secrets.token_urlsafe(16))
+
+_BAD_CREDENTIALS = 'wrong username or password'
+
+def _password_matches(stored_hash, password):
+    try:
+        return ph.verify(stored_hash, password)
+    except Exception:
+        return False
+
 @v2.route("/signup", methods=['POST'])
 def signup():
-    body = request.get_json(silent=True) or {}
-    username = body.get('username')
-    password = body.get('password')
-    if not isinstance(username, str) or not isinstance(password, str):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
         return jsonify({'error': 'invalid request'}), 400
-    username = username.strip()
-    if not username or len(username) > 64:
-        return jsonify({'error': 'username must be 1-64 characters'}), 400
-    if len(password) < 8:
-        return jsonify({'error': 'password must be at least 8 characters'}), 400
+    username = normalize_username(body.get('username'))
+    if not username:
+        return jsonify({'error': USERNAME_RULE}), 400
+    password = body.get('password')
+    if not valid_password(password):
+        return jsonify({'error': f'password must be {PASSWORD_MIN}-{PASSWORD_MAX} characters'}), 400
 
-    db = mongo['hcgateway']
-    usrStore = db['users']
-    if usrStore.find_one({'username': username}, {'_id': 1}):
-        return jsonify({'error': 'that username is taken'}), 409
-
-    user_id = str(ObjectId())
-    usrStore.insert_one({'_id': user_id, 'username': username, 'password': ph.hash(password)})
-
-    return jsonify(create_session(db, user_id, client=body.get('client'))), 201
+    # Accounts need an admin's approval (see account_requests). The answer is
+    # the same whether or not the request was queued, so this can't be used
+    # to probe for usernames.
+    file_request(mongo['hcgateway'], username, ph.hash(password), client=client_label(body.get('client')))
+    return jsonify({
+        'pending': True,
+        'message': 'account requested; it must be approved before you can sign in',
+    }), 202
 
 @v2.route("/login", methods=['POST'])
-def login(): 
-    if not request.json or not 'username' in request.json or not 'password' in request.json:
+def login():
+    body = request.get_json(silent=True)
+    # Plain strings only: a JSON object here would reach Mongo as a query operator.
+    if not isinstance(body, dict) or not isinstance(body.get('username'), str) or not isinstance(body.get('password'), str):
         return jsonify({'error': 'invalid request'}), 400
-    username = request.json['username']
-    password = request.json['password']
-    fcmToken = request.json['fcmToken'] if 'fcmToken' in request.json else None
+    username = normalize_username(body['username'])
+    password = body['password']
+    # No account can have a name or password outside these rules, so there is
+    # nothing to look up, and every query below only ever sees allowlisted text.
+    if not username or not valid_password(password, minimum=1):
+        return jsonify({'error': _BAD_CREDENTIALS}), 403
+    fcmToken = body.get('fcmToken')
 
     db = mongo['hcgateway']
     usrStore = db['users']
+
+    if login_throttle.is_locked(db, username):
+        return jsonify({'error': 'too many failed sign-in attempts; try again in 15 minutes'}), 429
 
     user = usrStore.find_one({'username': username})
 
     if not user:
-        # Accounts are created on the dashboard website (/signup), not here.
-        return jsonify({'error': 'no account with that username. Create one on the dashboard website first.'}), 404
-    
-    try:
-        ph.verify(user['password'], password)
-    except: 
-        return jsonify({'error': 'invalid password'}), 403
-   
-    if fcmToken:
+        pending = pending_request(db, username)
+        # Only someone who knows the password they asked with learns that the
+        # request is still waiting; everyone else gets the usual answer.
+        if _password_matches(pending['password'] if pending else _DUMMY_HASH, password):
+            return jsonify({'error': 'this account is waiting for approval', 'pending': True}), 403
+        login_throttle.record_failure(db, username)
+        return jsonify({'error': _BAD_CREDENTIALS}), 403
+
+    if not _password_matches(user['password'], password):
+        login_throttle.record_failure(db, username)
+        return jsonify({'error': _BAD_CREDENTIALS}), 403
+
+    login_throttle.clear_failures(db, username)
+
+    if isinstance(fcmToken, str) and 0 < len(fcmToken) <= 4096:
         try:
-            usrStore.update_one({'username': username}, {"$set": {'fcmToken': fcmToken}})
-        except:
+            usrStore.update_one({'_id': user['_id']}, {"$set": {'fcmToken': fcmToken}})
+        except Exception:
             return jsonify({'error': 'failed to update fcm token'}), 500
 
-    return jsonify(create_session(db, user['_id'], client=request.json.get('client'))), 201
+    return jsonify(create_session(db, user['_id'], client=client_label(body.get('client')))), 201
 
 
 @v2.route("/refresh", methods=['POST'])
 def refresh():
-    if not request.json or not 'refresh' in request.json:
+    body = request.get_json(silent=True)
+    refresh_token = body.get('refresh') if isinstance(body, dict) else None
+    if not isinstance(refresh_token, str) or not 0 < len(refresh_token) <= REFRESH_MAX:
         return jsonify({'error': 'invalid request'}), 400
 
-    session = refresh_session(mongo['hcgateway'], request.json['refresh'])
+    session = refresh_session(mongo['hcgateway'], refresh_token)
     if not session:
         return jsonify({'error': 'invalid refresh token'}), 403
 
@@ -134,13 +165,13 @@ def account():
 
 @v2.route("/account/password", methods=['POST'])
 def change_password():
-    body = request.get_json(silent=True) or {}
-    current = body.get('currentPassword')
-    new = body.get('newPassword')
-    if not isinstance(current, str) or not isinstance(new, str):
+    body = request.get_json(silent=True)
+    current = body.get('currentPassword') if isinstance(body, dict) else None
+    new = body.get('newPassword') if isinstance(body, dict) else None
+    if not isinstance(current, str) or not isinstance(new, str) or len(current) > PASSWORD_MAX:
         return jsonify({'error': 'invalid request'}), 400
-    if len(new) < 8:
-        return jsonify({'error': 'password must be at least 8 characters'}), 400
+    if not valid_password(new):
+        return jsonify({'error': f'password must be {PASSWORD_MIN}-{PASSWORD_MAX} characters'}), 400
 
     usrStore = mongo['hcgateway']['users']
     user = usrStore.find_one({'_id': g.user}, {'password': 1})
